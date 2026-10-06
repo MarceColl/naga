@@ -69,9 +69,17 @@ pub enum Event {
     Viewport(usize, Vec<usize>),
 }
 
+/// A table's rows, as seeded (`run: None`) or after a run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Data {
+    pub table: Name,
+    pub run: Option<usize>,
+}
+
 #[derive(Clone)]
 pub struct State {
     pub an: Rc<Analysis>,
+    pub data: Option<Data>,
     pub undo: Vec<String>,
     pub sel: Option<Sel>,
     /// Where a shift-extended selection started.
@@ -93,6 +101,7 @@ impl State {
     pub fn new(text: &str) -> State {
         State {
             an: Rc::new(Analysis::new(text)),
+            data: None,
             undo: vec![],
             sel: None,
             anchor: None,
@@ -179,9 +188,40 @@ fn edit_hole(st: State, h: &Step) -> State {
     State { mode: Mode::Edit(e), sel: None, ..st }.say("write the fill · enter keeps it · shift-enter for a new line · esc leaves the hole", Tone::Cmd)
 }
 
+/// Opens the data view on `table`, keeping the run it showed last.
+fn open_data(st: State, table: &str) -> State {
+    if !st.an.program.tables.contains_key(table) {
+        return st.say(format!("there's no table called {table}"), Tone::No);
+    }
+    let run = st.data.as_ref().and_then(|d| d.run);
+    State { data: Some(Data { table: table.into(), run }), sel: None, hover: None, ..st }
+}
+
+fn data(st: State, d: Data, ev: Event) -> State {
+    let tables: Vec<Name> = st.an.program.tables.keys().cloned().collect();
+    let runs = st.an.runs.len();
+    let at = tables.iter().position(|t| *t == d.table).unwrap_or(0);
+    let d = match ev {
+        Event::Key(Key::Escape, _) => return State { data: None, ..st },
+        Event::Key(Key::Right, _) => Data { run: Some(d.run.map_or(0, |r| r + 1).min(runs.saturating_sub(1))).filter(|_| runs > 0), ..d },
+        Event::Key(Key::Left, _) => Data { run: d.run.and_then(|r| r.checked_sub(1)), ..d },
+        Event::Key(Key::Down, _) => Data { table: tables[(at + 1) % tables.len()].clone(), ..d },
+        Event::Key(Key::Up, _) => Data { table: tables[(at + tables.len() - 1) % tables.len()].clone(), ..d },
+        Event::Press(Some(Target::Table(t)), _) => Data { table: t, ..d },
+        Event::Press(Some(Target::Run(r)), _) => Data { run: r, ..d },
+        Event::Hover(t, _) => return State { hover: t, ..st },
+        _ => d,
+    };
+    State { data: Some(d), ..st }
+}
+
 pub fn update(st: State, ev: Event) -> State {
     match (&st.mode, ev) {
         (_, Event::Viewport(rows, lines)) => State { rows, row_lines: Rc::new(lines), ..st },
+        (Mode::Idle, ev) if st.data.is_some() && !matches!(ev, Event::Scroll(_)) => {
+            let d = st.data.clone().unwrap();
+            data(st, d, ev)
+        }
         (_, Event::Scroll(dy)) => State { scroll: (st.scroll + dy).clamp(0.0, st.row_lines.len() as f32), ..st },
         (Mode::Edit(e), Event::Key(k, shift)) => {
             let e = e.clone();
@@ -300,7 +340,14 @@ fn run(st: State, raw: &str) -> State {
             }
             _ => st.say(need("steps"), Tone::No),
         },
-        "rework" | "data" | "debug" | "run" => st.say(format!("{op} isn’t built yet"), Tone::No),
+        "data" => {
+            let table = ids.as_ref().and_then(|i| an.step(i[0])).and_then(|s| s.table().cloned()).or_else(|| an.program.tables.keys().next().cloned());
+            match table {
+                Some(t) => open_data(st, &t),
+                None => st.say("this program has no tables", Tone::No),
+            }
+        }
+        "rework" | "debug" | "run" => st.say(format!("{op} isn’t built yet"), Tone::No),
         _ => st.say(format!("{raw} isn’t an operation — try {}", OPS.join(" · ")), Tone::No),
     }
 }
@@ -310,7 +357,8 @@ fn idle(st: State, ev: Event) -> State {
     match ev {
         Event::Press(None, _) => State { sel: None, anchor: None, ..st },
         Event::Press(Some(Target::Def(name, line)), _) => State { sel: Some(Sel::Def(name, line)), anchor: None, ..st },
-        Event::Press(Some(Target::Table(_)), _) => st.say("data isn’t built yet", Tone::No),
+        Event::Press(Some(Target::Table(t)), _) => open_data(st, &t),
+        Event::Press(Some(Target::Run(_)), _) => st,
         Event::Press(Some(Target::Step(id)), shift) => {
             let Some(s) = an.step(id) else { return st };
             if s.hole().is_some() {
@@ -486,6 +534,17 @@ mod tests {
         assert_eq!(st.an.text, SRC);
         let st = update(typed(st, "frobnicate"), Event::Key(Key::Enter, false));
         assert_eq!(st.msg.as_ref().map(|m| m.1), Some(Tone::No));
+    }
+
+    #[test]
+    fn the_data_view_walks_tables_and_runs() {
+        let src = "table ts :: {n: Num}\ntable us :: {n: Num}\nroute GET /x = w\nw = +{status: 200, json: 1}\nrun \"a\"\n  GET /x → 200\nrun \"b\"\n  GET /x → 200\n";
+        let st = update(typed(State::new(src), "data"), Event::Key(Key::Enter, false));
+        assert_eq!(st.data, Some(Data { table: "ts".into(), run: None }));
+        let st = keys(st, &[(Key::Right, false), (Key::Right, false), (Key::Right, false), (Key::Down, false)]);
+        assert_eq!(st.data, Some(Data { table: "us".into(), run: Some(1) }));
+        let st = keys(st, &[(Key::Left, false), (Key::Left, false), (Key::Escape, false)]);
+        assert_eq!(st.data, None);
     }
 
     #[test]

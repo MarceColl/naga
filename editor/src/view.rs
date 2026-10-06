@@ -1,7 +1,10 @@
 //! The screen as data: what to draw, in which colours, and what each piece of text points at.
 //! colorForth-style: one screen of code on black, colour as meaning, one status line at the bottom.
 use crate::analysis::{Analysis, Range, Step};
-use crate::state::{Edit, Mode, OPS, Sel, State, Tone};
+use crate::state::{Data, Edit, Mode, OPS, Sel, State, Tone};
+use naga::ast::ColType;
+use naga::runs::Verdict;
+use naga::value::{Value, eqv};
 use naga::check::Point;
 use naga::value::Name;
 
@@ -35,6 +38,8 @@ pub enum Target {
     Step(usize),
     Def(Name, usize),
     Table(Name),
+    /// The data view's seed (`None`) or one of its runs.
+    Run(Option<usize>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -236,6 +241,9 @@ fn sel_range(an: &Analysis, ids: &[usize]) -> Option<Range> {
 }
 
 pub fn view(st: &State) -> Frame {
+    if let Some(d) = &st.data {
+        return data_view(st, d);
+    }
     let an = &st.an;
     let mut err_steps = vec![];
     let mut err_lines = vec![];
@@ -440,7 +448,8 @@ fn hole_arrives(an: &Analysis, hole: &Step) -> Vec<String> {
     out
 }
 
-fn bar(st: &State, f: &mut Frame) {
+/// `HOLES n · ERRORS n · RUNS p/t`, in red where something needs doing.
+fn stat(st: &State, f: &mut Frame) {
     let an = &st.an;
     let (holes, errs) = (an.holes().count(), an.errors.len());
     let dim = Style::plain(DIM);
@@ -448,6 +457,12 @@ fn bar(st: &State, f: &mut Frame) {
     f.stat.push(" · ", dim, None);
     f.stat.push(&format!("ERRORS {errs}"), if errs > 0 { Style::plain(ERR) } else { dim }, None);
     f.stat.push(&format!(" · RUNS {}/{}", an.passing(), an.runs.len()), dim, None);
+}
+
+fn bar(st: &State, f: &mut Frame) {
+    let an = &st.an;
+    let dim = Style::plain(DIM);
+    stat(st, f);
     match (&st.mode, &st.msg) {
         (Mode::Cmd(c), _) => {
             let first = c.split_whitespace().next().unwrap_or("").to_lowercase();
@@ -482,6 +497,7 @@ fn shape(an: &Analysis, t: &Target) -> Vec<Line> {
     let mut first = Line::default();
     let mut lines = vec![];
     match t {
+        Target::Run(_) => {}
         Target::Table(name) => {
             first.push(&upper(name), Style::bold(TABLE, 800), None);
             first.push(" · CLICK TO SEE ITS ROWS", k, None);
@@ -539,6 +555,149 @@ fn shape(an: &Analysis, t: &Target) -> Vec<Line> {
     }
     lines.insert(0, first);
     lines
+}
+
+// ---------- the data view ----------
+fn verdict_color(v: Verdict) -> Color {
+    match v {
+        Verdict::Pass => CALL,
+        Verdict::Fail | Verdict::Error => ERR,
+        Verdict::Waits => HOLE,
+    }
+}
+
+/// A cell: its text and colour, by the column's type.
+fn cell(ty: ColType, v: Option<&Value>) -> (String, Color) {
+    match (ty, v) {
+        (_, None | Some(Value::Nil)) => ("—".into(), FAINT),
+        (ColType::Int | ColType::Num | ColType::Const, Some(v)) => (upper(&v.show()), NUM),
+        (ColType::Text, Some(v)) => (v.text(), STR),
+        (ColType::Bool, Some(v)) => (upper(&v.show()), KW),
+        (ColType::Json, Some(v)) => (v.show(), FG),
+    }
+}
+
+fn data_view(st: &State, d: &Data) -> Frame {
+    let an = &st.an;
+    let mut f = Frame::default();
+    let Some(t) = an.program.tables.get(&d.table) else { return f };
+    let run = d.run.and_then(|i| Some((i, an.runs.get(i)?, an.program.runs.get(i)?)));
+    let seeded = an.seeded();
+    let before = seeded.get(&t.name).cloned().unwrap_or_default();
+    let after = run.map_or_else(|| before.clone(), |(_, o, _)| o.end.get(&t.name).cloned().unwrap_or_default());
+    let id = |r: &Value| r.as_rec().and_then(|r| r.get("id")).map(Value::show).unwrap_or_default();
+    let get = |r: &Value, k: &str| r.as_rec().and_then(|r| r.get(k)).cloned();
+    let cols: Vec<(Name, ColType, bool)> = std::iter::once(("id".into(), ColType::Int, false)).chain(t.cols.iter().map(|c| (c.name.clone(), c.ty, c.opt))).collect();
+    // every row after, then the ones the run deleted; marked + − ~
+    let mut rows: Vec<(Value, char, Vec<Name>)> = vec![];
+    for r in &after {
+        let old = before.iter().find(|b| id(b) == id(r));
+        let changed: Vec<Name> = old.map_or(vec![], |o| cols.iter().filter(|c| !opt_eq(get(o, &c.0), get(r, &c.0))).map(|c| c.0.clone()).collect());
+        let mark = if old.is_none() { '+' } else if changed.is_empty() { ' ' } else { '~' };
+        rows.push((r.clone(), mark, changed));
+    }
+    rows.extend(before.iter().filter(|b| !after.iter().any(|a| id(a) == id(b))).map(|b| (b.clone(), '−', vec![])));
+    rows.sort_by(|a, b| id(&a.0).parse::<f64>().unwrap_or(0.0).total_cmp(&id(&b.0).parse::<f64>().unwrap_or(0.0)));
+
+    // tabs and runs
+    let mut head = Line::default();
+    for name in an.program.tables.keys() {
+        let style = if *name == t.name { Style::bold(TABLE, 800) } else { Style::plain(FAINT) };
+        head.push(&upper(name), style, Some(Target::Table(name.clone())));
+        head.push("  ", Style::plain(FAINT), None);
+    }
+    head.push("  ", Style::plain(FAINT), None);
+    let on = |yes: bool, fg: Color| Style { fg: if yes { FG } else { fg }, bg: yes.then_some(RULE), weight: 500, err: false };
+    head.push(" SEED ", on(d.run.is_none(), FAINT), Some(Target::Run(None)));
+    for (i, o) in an.runs.iter().enumerate() {
+        head.push(&format!(" {} ", i + 1), on(d.run == Some(i), verdict_color(o.verdict)), Some(Target::Run(Some(i))));
+    }
+    f.code.push(head);
+    f.code.push(Line::default());
+
+    // the table, in columns three cells apart
+    let text = |r: &Value, c: &(Name, ColType, bool)| cell(c.1, get(r, &c.0).as_ref()).0;
+    let widths: Vec<usize> = cols.iter().map(|c| rows.iter().map(|r| text(&r.0, c).chars().count()).chain([c.0.chars().count(), c.1.name().len() + 1]).max().unwrap_or(0) + 3).collect();
+    let pad = |s: &str, w: usize| format!("{s}{}", " ".repeat(w.saturating_sub(s.chars().count())));
+    let mut names = Line::default();
+    let mut types = Line::default();
+    names.push("  ", Style::plain(FG), None);
+    types.push("  ", Style::plain(FAINT), None);
+    for (c, w) in cols.iter().zip(&widths) {
+        names.push(&pad(&upper(&c.0), *w), Style::bold(FG, 800), None);
+        types.push(&pad(&upper(&format!("{}{}", c.1.name(), if c.2 { "?" } else { "" })), *w), Style::plain(FAINT), None);
+    }
+    f.code.extend([names, types]);
+    if rows.is_empty() {
+        f.code.push(Line { spans: vec![Span { text: "  NO ROWS".into(), style: Style::plain(FAINT), target: None }], src: 0 });
+    }
+    for (r, mark, changed) in &rows {
+        let mut line = Line::default();
+        let mc = match mark {
+            '+' => CALL,
+            '−' => ERR,
+            '~' => OP,
+            _ => FG,
+        };
+        let bg = (*mark == '+').then_some([0x07, 0x17, 0x0D]);
+        line.push(&format!("{mark} "), Style::bold(mc, 800), None);
+        for (c, w) in cols.iter().zip(&widths) {
+            let (s, fg) = cell(c.1, get(r, &c.0).as_ref());
+            let fg = if *mark == '−' { FAINT } else if changed.contains(&c.0) { OP } else { fg };
+            line.push(&pad(&s, *w), Style { fg, bg, weight: 500, err: false }, None);
+        }
+        f.code.push(line);
+    }
+
+    // what the run asked of this table
+    if let Some((i, o, _)) = run {
+        f.code.push(Line::default());
+        let q = format!("\"{}\"", t.name);
+        let mut h = Line::default();
+        h.push(&upper(&format!("what run {} asked of {}", i + 1, t.name)), Style::plain(DIM), None);
+        f.code.push(h);
+        let ops: Vec<&String> = o.sql.iter().filter(|l| l.contains(&q)).collect();
+        if ops.is_empty() {
+            f.code.push(Line { spans: vec![Span { text: "NOTHING".into(), style: Style::plain(FAINT), target: None }], src: 0 });
+        }
+        for l in ops {
+            f.code.push(Line { spans: vec![Span { text: l.clone(), style: Style::plain(FAINT), target: None }], src: 0 });
+        }
+    }
+
+    // the bar
+    let mut first = Line::default();
+    first.push(&upper(&t.name), Style::bold(TABLE, 800), None);
+    let decl: Vec<String> = t.cols.iter().map(|c| format!("{}: {}{}", c.name, c.ty.name(), if c.opt { "?" } else { "" })).collect();
+    first.push(&upper(&format!(" :: {{id: Int, {}}}", decl.join(", "))), Style::plain(DIM), None);
+    let mut second = Line::default();
+    second.push(&format!("{} ROWS ", after.len()), Style::plain(FG), None);
+    match run {
+        None => second.push("AS SEEDED", Style::plain(FG), None),
+        Some((i, o, r)) => {
+            second.push(&upper(&format!("after run {} · {} · ", i + 1, r.name)), Style::plain(FG), None);
+            let (what, c) = match o.verdict {
+                Verdict::Pass => ("passes".to_string(), CALL),
+                Verdict::Waits => ("stopped at a hole".to_string(), HOLE),
+                Verdict::Error => (format!("stops: {}", o.detail.clone().unwrap_or_default()), ERR),
+                Verdict::Fail => ("answers something else".to_string(), ERR),
+            };
+            second.push(&upper(&what), Style::plain(c), None);
+            let n = |m: char| rows.iter().filter(|r| r.1 == m).count();
+            second.push(&format!(" · +{} −{} ~{}", n('+'), n('−'), n('~')), Style::plain(DIM), None);
+        }
+    }
+    f.shape = vec![first, second];
+    f.msg.push("← → SEED AND RUNS · ↑ ↓ TABLES · ESC BACK TO THE CODE", Style::plain(DIM), None);
+    stat(st, &mut f);
+    f
+}
+
+fn opt_eq(a: Option<Value>, b: Option<Value>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => eqv(&a, &b),
+        (a, b) => a.is_none() && b.is_none(),
+    }
 }
 
 #[cfg(test)]

@@ -165,12 +165,12 @@ fn shot(state: State, out: &str, opts: &std::collections::HashMap<&str, &str>) -
         st = update(update(st, Event::Press(t.clone(), false)), Event::Release);
         st = update(st, Event::Hover(t, false));
     }
+    for c in opts.get("--type").copied().unwrap_or("").chars() {
+        st = update(st, Event::Key(Key::Char(c), false));
+    }
     for k in opts.get("--keys").map_or(vec![], |k| k.split(',').collect()) {
         let (k, shift) = key(k).ok_or(format!("naga-edit: unknown key {k}"))?;
         st = update(st, Event::Key(k, shift));
-    }
-    for c in opts.get("--type").copied().unwrap_or("").chars() {
-        st = update(st, Event::Key(Key::Char(c), false));
     }
     let f = view(&st);
     g.draw(&f, st.scroll);

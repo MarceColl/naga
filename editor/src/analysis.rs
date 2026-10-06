@@ -173,6 +173,16 @@ impl Analysis {
         self.defs.iter().find(|d| d.line == line)
     }
 
+    /// Every table's rows as seeded, even while the program doesn't parse.
+    pub fn seeded(&self) -> naga::runs::Tables {
+        if let Some(r) = self.runs.first() {
+            return r.seed.clone();
+        }
+        let all: Vec<Name> = self.program.tables.keys().cloned().collect();
+        let store = naga::store::Store::new(&self.program).ok().and_then(|mut s| s.seed(&self.program, &all).ok().map(|_| s));
+        store.and_then(|mut s| s.snapshot(&self.program).ok()).unwrap_or_default()
+    }
+
     pub fn passing(&self) -> usize {
         self.runs.iter().filter(|r| r.verdict == naga::runs::Verdict::Pass).count()
     }

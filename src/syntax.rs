@@ -232,6 +232,10 @@ impl Ts<'_> {
     fn pos(&self, start: &Token) -> Pos {
         Pos { line: start.line, col: start.col }
     }
+    /// Just past the last token taken.
+    fn end(&self) -> Pos {
+        self.last().map_or_else(Pos::default, |t| Pos { line: t.line, col: t.end })
+    }
 }
 
 fn id_of(t: &Option<Token>) -> Option<&Name> {
@@ -628,15 +632,25 @@ fn body(ts: &mut Ts, closer: Option<&str>) -> R<Vec<Stmt>> {
             return ts.err("‖ needs steps on both sides", None);
         }
         let pos = ts.pos(start.as_ref().unwrap());
-        return Ok(vec![Stmt { kind: StmtKind::Par(branches.into_iter().map(Rc::from).collect()), pos }]);
+        return Ok(vec![Stmt { kind: StmtKind::Par(branches.into_iter().map(Rc::from).collect()), pos, end: ts.end() }]);
     }
     Ok(branches.pop().unwrap())
 }
 
+/// A statement ends where its last token does; one already given an end (inside `( … )`) keeps it.
 fn stmt(ts: &mut Ts) -> R<Vec<Stmt>> {
+    let mut v = stmt_at(ts)?;
+    let end = ts.end();
+    for s in v.iter_mut().filter(|s| s.end == Pos::default()) {
+        s.end = end;
+    }
+    Ok(v)
+}
+
+fn stmt_at(ts: &mut Ts) -> R<Vec<Stmt>> {
     let start = ts.peek(0).unwrap().clone();
     let pos = ts.pos(&start);
-    let mk = |kind| Ok(vec![Stmt { kind, pos }]);
+    let mk = |kind| Ok(vec![Stmt { kind, pos, end: Pos::default() }]);
     match &start.t {
         Tk::Hole(note) => {
             ts.next();

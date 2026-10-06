@@ -106,6 +106,7 @@ impl Cx<'_> {
             if !cur.iter().any(World::live) {
                 break;
             }
+            self.point(false, st.pos, &cur);
             let mut next = vec![];
             for w in cur {
                 if !w.live() {
@@ -116,6 +117,7 @@ impl Cx<'_> {
                 next.extend(self.run_stmt(w, st));
             }
             cur = widen(next)?;
+            self.point(true, st.pos, &cur);
         }
         Ok(cur)
     }
@@ -520,6 +522,11 @@ impl Cx<'_> {
                     vec![]
                 }
             };
+            // preconditions every surviving world shares
+            let live: Vec<&World> = res.iter().filter(|r| r.fail.is_none()).collect();
+            let shared = |(k, f): (&Key, &Fact)| f.src == Src::Pre && live.iter().all(|r| r.facts.get(k).is_some_and(|g| g.src == Src::Pre && g.has == f.has));
+            let extra = live.first().map(|l| l.facts.iter().filter(|kf| shared(*kf)).map(|(k, f)| (k.clone(), f.clone())).collect()).unwrap_or_default();
+            self.flush(&extra);
             let cases = group_cases(res.iter().map(|r| case_of(r, &group)).collect());
             group.cases = simplify(cases, &group);
             groups.push(group);

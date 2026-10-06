@@ -3,6 +3,7 @@ use crate::ast::*;
 use crate::eval::{Env, eval};
 use crate::num;
 use crate::value::*;
+use indexmap::IndexMap;
 use rusqlite::{Connection, types::ValueRef};
 
 fn qi(n: &str) -> String {
@@ -335,6 +336,12 @@ impl Store {
 
     pub fn all(&mut self, t: &Table) -> Result<Vec<Value>, RunError> {
         self.rows(t, &format!("SELECT * FROM {} ORDER BY \"id\"", qi(&t.name)), vec![], false)
+    }
+
+    /// Every row of every table, without logging: what the data view shows.
+    pub fn snapshot(&mut self, p: &Program) -> Result<IndexMap<Name, Vec<Value>>, RunError> {
+        let all = |s: &mut Store, t: &Table| s.rows(t, &format!("SELECT * FROM {} ORDER BY \"id\"", qi(&t.name)), vec![], true);
+        p.tables.values().map(|t| Ok((t.name.clone(), all(self, t)?))).collect()
     }
 
     pub fn get(&mut self, t: &Table, id: f64, silent: bool) -> Result<Option<Value>, RunError> {

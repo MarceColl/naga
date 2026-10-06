@@ -32,6 +32,9 @@ pub struct Cx<'a> {
     chunk_line: usize,
     errors: Vec<(Option<At>, String)>,
     report_again: bool,
+    /// Worlds seen around statements, waiting for the clause's shared preconditions.
+    pending: Vec<(bool, At, World)>,
+    points: IndexMap<(bool, At), Vec<Point>>,
 }
 
 impl Cx<'_> {
@@ -43,6 +46,35 @@ impl Cx<'_> {
         let at = self.at(pos);
         self.errors.push((at, msg));
     }
+    /// The live worlds just before (or after) a statement; only words record them.
+    fn point(&mut self, after: bool, pos: Pos, ws: &[World]) {
+        if let Some(at) = self.at(pos) {
+            self.pending.extend(ws.iter().filter(|w| w.live()).map(|w| (after, at.clone(), w.clone())));
+        }
+    }
+    /// Callers check a clause's preconditions before entering it, so they hold at every step inside.
+    fn flush(&mut self, extra: &IndexMap<ty::Key, world::Fact>) {
+        for (after, at, mut w) in std::mem::take(&mut self.pending) {
+            if !extra.is_empty() {
+                let mut facts = extra.clone();
+                facts.extend(w.facts);
+                w.facts = facts;
+            }
+            let pt = Point { text: world::fmt_w(Some(&w), &w.shape, 0), lifted: w.lifted };
+            let list = self.points.entry((after, at)).or_default();
+            if !list.iter().any(|x| x.text == pt.text) {
+                list.push(pt);
+            }
+        }
+    }
+}
+
+/// The record's shape around a statement, as the editor shows it. `lifted`: it depends on a
+/// callee's dispatch rather than on what the word itself knows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Point {
+    pub text: String,
+    pub lifted: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +101,9 @@ pub struct Stats {
 
 pub struct Checked {
     pub errors: Vec<Error>,
+    /// Shapes before and after each statement, by its (line, col).
+    pub before: HashMap<(usize, usize), Vec<Point>>,
+    pub after: HashMap<(usize, usize), Vec<Point>>,
     pub signatures: HashMap<Name, Vec<Case>>,
     pub stats: Stats,
 }
@@ -77,6 +112,7 @@ struct Solved {
     sigs: HashMap<Name, Rc<Sig>>,
     /// Lines relative to each clause's chunk, so a solved group stays valid when it moves.
     errors: Vec<(At, String)>,
+    points: IndexMap<(bool, At), Vec<Point>>,
 }
 
 /// Keeps solved groups between checks of successive versions of a program.
@@ -144,9 +180,9 @@ fn uses_tables(text: &str) -> bool {
 
 fn solve_group(p: &Program, comp: &[Name], sigs: &HashMap<Name, Rc<Sig>>) -> Solved {
     let mut local: HashMap<Name, Rc<Sig>> = comp.iter().map(|n| (n.clone(), Rc::new(Sig::Bottom))).collect();
-    let mut errors = vec![];
+    let (mut errors, mut points) = (vec![], IndexMap::new());
     for _ in 0..25 {
-        let mut cx = Cx { p, sigs, local: local.clone(), here: None, word: None, ci: 0, chunk_line: 0, errors: vec![], report_again: true };
+        let mut cx = Cx { p, sigs, local: local.clone(), here: None, word: None, ci: 0, chunk_line: 0, errors: vec![], report_again: true, pending: vec![], points: IndexMap::new() };
         let mut next = vec![];
         let mut changed = false;
         for n in comp {
@@ -159,11 +195,12 @@ fn solve_group(p: &Program, comp: &[Name], sigs: &HashMap<Name, Rc<Sig>>) -> Sol
         }
         local.extend(next);
         errors = cx.errors.into_iter().map(|(at, m)| (at.expect("errors inside a word have a place"), m)).collect();
+        points = cx.points;
         if !changed {
             break;
         }
     }
-    Solved { sigs: local, errors }
+    Solved { sigs: local, errors, points }
 }
 
 /// Where a run starts: the entry from an empty record, a route from the record it declares.
@@ -272,13 +309,20 @@ impl Checker {
                 errors.push(Error { line, col, msg });
             }
         };
+        let (mut before, mut after) = (HashMap::new(), HashMap::new());
         for r in &results {
             for (at, msg) in &r.errors {
                 push(abs(at), at.col, msg.clone());
             }
+            for ((is_after, at), pts) in &r.points {
+                if p.words.contains_key(&at.word) {
+                    let target = if *is_after { &mut after } else { &mut before };
+                    target.insert((abs(at), at.col), pts.clone());
+                }
+            }
         }
         for site in call_sites(p, entry) {
-            let mut top = Cx { p, sigs: &sigs, local: HashMap::new(), here: None, word: None, ci: 0, chunk_line: 0, errors: vec![], report_again: false };
+            let mut top = Cx { p, sigs: &sigs, local: HashMap::new(), here: None, word: None, ci: 0, chunk_line: 0, errors: vec![], report_again: false, pending: vec![], points: IndexMap::new() };
             let outs = top.apply_sig(World::new(site.input), sigs.get(site.word).cloned(), site.word, Pos { line: 1, col: 0 });
             // a route answers with whatever status and json its word leaves
             for w in outs.iter().filter(|w| site.reply && w.live()) {
@@ -327,6 +371,6 @@ impl Checker {
                 (n.clone(), cases)
             })
             .collect();
-        Checked { errors, signatures, stats }
+        Checked { errors, before, after, signatures, stats }
     }
 }

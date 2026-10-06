@@ -7,7 +7,7 @@ use indexmap::{IndexMap, IndexSet};
 use std::rc::Rc;
 
 /// A place in a clause, with the line relative to the clause's chunk.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct At {
     pub word: Name,
     pub ci: usize,

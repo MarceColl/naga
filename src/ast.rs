@@ -135,6 +135,8 @@ pub enum StmtKind {
 pub struct Stmt {
     pub kind: StmtKind,
     pub pos: Pos,
+    /// Just past the statement's last token.
+    pub end: Pos,
 }
 
 impl Stmt {

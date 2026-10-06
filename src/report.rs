@@ -9,7 +9,9 @@ pub fn report(src: &str) -> String {
     out.extend(p.errors.iter().map(|e| format!("parse {}:{} {}", e.line, e.col, e.msg)));
     out.extend(p.warnings.iter().map(|w| format!("warn {} {}", w.line, w.msg)));
     out.extend(p.holes.iter().map(|h| format!("hole {} {}: {}", h.line, h.word, h.note)));
-    let entry = if p.words.contains_key("main") { Some("main".into()) } else { p.words.keys().next().cloned() };
+    // without main, the first word runs, unless routes are the way in
+    let first = p.words.keys().next().filter(|_| p.routes.is_empty());
+    let entry = if p.words.contains_key("main") { Some("main".into()) } else { first.cloned() };
     if let Some(entry) = &entry {
         let mut s = Session::new(&p, entry);
         s.run(Step::Continue, &[], 200000);

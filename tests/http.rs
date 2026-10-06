@@ -91,3 +91,22 @@ fn route_errors() {
     assert_eq!(first("route GET /a/:x:Int = w\nroute POST /a/:x:Int = w\nroute POST /a/:x:Text = w\nw = nop"), "3:0 route POST /a/:x:Text is already declared on line 2");
     assert_eq!(first("route GET /a/:x:Int = w\nroute POST /a/:y:Int = w\nw = nop"), "2:0 route POST /a/:y:Int: name the params as on line 1 (/a/:x:Int)");
 }
+
+#[test]
+fn routes_are_checked_as_call_sites() {
+    let errors = |src: &str| {
+        let p = parse(src);
+        let r = naga::check::Checker::default().check(&p, None);
+        r.errors.iter().map(|e| format!("{}:{} {}", e.line, e.col, e.msg)).collect::<Vec<_>>()
+    };
+    assert_eq!(errors("route GET /x = w\nw = +{json: 1}\n"), ["1:0 route GET /x: w can finish without status"]);
+    assert_eq!(
+        errors("route GET /x/:id:Int = w\nw {id: 1} = +{status: 200, json: 1}\nw = +{json: 2}\n"),
+        ["1:0 route GET /x/:id:Int: w can finish without status"]
+    );
+    assert_eq!(
+        errors("route GET /x?q:Text? = w\nw = +{status: 200, json: q}\n"),
+        ["2:4 w needs q, but nothing on this path provides it (w) (when route GET /x runs)"]
+    );
+    assert!(errors("route POST /x {n: Num} = w\nw = +{status: 201, json: body.n + 1}\n").is_empty());
+}

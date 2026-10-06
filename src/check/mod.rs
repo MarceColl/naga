@@ -9,7 +9,7 @@ mod stmt;
 mod ty;
 mod world;
 
-use crate::ast::{Pos, Program, StmtKind, walk};
+use crate::ast::{Col, Pos, Program, StmtKind, walk};
 use crate::value::Name;
 use indexmap::IndexMap;
 pub use sig::Sig;
@@ -166,6 +166,40 @@ fn solve_group(p: &Program, comp: &[Name], sigs: &HashMap<Name, Rc<Sig>>) -> Sol
     Solved { sigs: local, errors }
 }
 
+/// Where a run starts: the entry from an empty record, a route from the record it declares.
+struct CallSite<'a> {
+    word: &'a Name,
+    input: Shape,
+    /// Names the site in errors found inside the word; `unplaced` prefixes the others, at `line`.
+    label: String,
+    unplaced: String,
+    line: usize,
+    /// A route must leave {status, json}.
+    reply: bool,
+}
+
+fn call_sites<'a>(p: &'a Program, entry: Option<&'a Name>) -> Vec<CallSite<'a>> {
+    let entry = entry.filter(|e| p.words.contains_key(*e)).map(|e| CallSite {
+        word: e,
+        input: Shape::open(Origin::Closed),
+        label: e.to_string(),
+        unplaced: format!("running {e} from an empty record"),
+        line: p.words[e].clauses[0].chunk_line,
+        reply: false,
+    });
+    let routes = p.routes.iter().filter(|r| p.words.contains_key(&r.word)).map(|r| {
+        let field = |c: &Col| (c.name.clone(), ty::Field { ty: ty::col_type(c.ty), opt: c.opt });
+        let mut fields: IndexMap<Name, ty::Field> = r.params().map(field).collect();
+        if let Some(cols) = &r.body {
+            fields.insert("body".into(), ty::Field { ty: ty::rec(Shape::closed(cols.iter().map(field).collect())), opt: false });
+        }
+        fields.insert("time".into(), ty::Field { ty: ty::Ty::Text, opt: false });
+        let label = format!("route {} {}", r.verb, r.path);
+        CallSite { word: &r.word, input: Shape::closed(fields), unplaced: label.clone(), label, line: r.line, reply: true }
+    });
+    entry.into_iter().chain(routes).collect()
+}
+
 impl Checker {
     pub fn check(&mut self, p: &Program, entry: Option<&Name>) -> Checked {
         let names: Vec<Name> = p.words.keys().cloned().collect();
@@ -218,12 +252,6 @@ impl Checker {
             }
             results.push(r);
         }
-        // the run starts from an empty record
-        let mut top = Cx { p, sigs: &sigs, local: HashMap::new(), here: None, word: None, ci: 0, chunk_line: 0, errors: vec![], report_again: false };
-        if let Some(entry) = entry.filter(|e| p.words.contains_key(*e)) {
-            let w = World::new(Shape::open(Origin::Closed));
-            top.apply_sig(w, sigs.get(entry).cloned(), entry, Pos { line: 1, col: 0 });
-        }
         // relative positions → lines in the current text
         let abs = |at: &At| p.words[&at.word].clauses[at.ci].chunk_line + at.line - 1;
         let mut errors: Vec<Error> = vec![];
@@ -237,15 +265,28 @@ impl Checker {
                 push(abs(at), at.col, msg.clone());
             }
         }
-        for (at, msg) in top.errors {
-            let entry = entry.unwrap();
-            match at.filter(|a| p.words.contains_key(&a.word)) {
-                Some(at) => {
-                    let chained = msg.find(" (").is_some_and(|i| msg[i..].contains(" ← "));
-                    let msg = if chained { format!("{msg}, when {entry} runs") } else { format!("{msg} (when {entry} runs)") };
-                    push(abs(&at), at.col, msg);
+        for site in call_sites(p, entry) {
+            let mut top = Cx { p, sigs: &sigs, local: HashMap::new(), here: None, word: None, ci: 0, chunk_line: 0, errors: vec![], report_again: false };
+            let outs = top.apply_sig(World::new(site.input), sigs.get(site.word).cloned(), site.word, Pos { line: 1, col: 0 });
+            // a route answers with whatever status and json its word leaves
+            for w in outs.iter().filter(|w| site.reply && w.live()) {
+                for f in ["status", "json"] {
+                    match world::lookup(w, &w.shape, f) {
+                        world::Look::Present(..) => {}
+                        world::Look::Opt(_) => top.errors.push((None, format!("{} might finish without {f}", site.word))),
+                        _ => top.errors.push((None, format!("{} can finish without {f}", site.word))),
+                    }
                 }
-                None => push(p.words[entry].clauses[0].chunk_line, 0, format!("running {entry} from an empty record: {msg}")),
+            }
+            for (at, msg) in top.errors {
+                match at.filter(|a| p.words.contains_key(&a.word)) {
+                    Some(at) => {
+                        let chained = msg.find(" (").is_some_and(|i| msg[i..].contains(" ← "));
+                        let msg = if chained { format!("{msg}, when {} runs", site.label) } else { format!("{msg} (when {} runs)", site.label) };
+                        push(abs(&at), at.col, msg);
+                    }
+                    None => push(site.line, 0, format!("{}: {msg}", site.unplaced)),
+                }
             }
         }
         errors.sort_by_key(|e| (e.line, e.col));

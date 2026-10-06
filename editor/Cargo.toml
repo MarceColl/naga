@@ -12,5 +12,7 @@ glyphon = "0.12"
 naga = { path = ".." }
 png = "0.18"
 pollster = "0.4"
+serde_json = "1"
+ureq = { version = "3", features = ["json"] }
 wgpu = "30"
 winit = "0.30"

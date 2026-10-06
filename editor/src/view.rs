@@ -7,7 +7,6 @@ use naga::runs::Verdict;
 use crate::debug::Debug;
 use naga::machine::{self, Frame as MFrame, Status};
 use naga::value::{Value, eqv, show_rec};
-use naga::check::Point;
 use naga::value::Name;
 
 pub type Color = [u8; 3];
@@ -282,6 +281,17 @@ pub fn view(st: &State) -> Frame {
             continue;
         }
         folding = false;
+        // the agent's fill, typed into its hole as it arrives
+        let typing = st.agent.as_ref().and_then(|a| {
+            let h = an.step(a.hole).filter(|h| h.range.pos.line == ln)?;
+            let text: Vec<char> = a.fill.as_ref().map_or(vec![], |f| f.text().chars().take(a.shown).collect());
+            let range = Range { pos: h.range.pos, end: naga::ast::Pos { line: ln, col: chars.len() } };
+            Some(Edit { range, cursor: text.len(), text, rework: false, hole: Some(h.id) })
+        });
+        if let Some(e) = typing {
+            code.extend(edit_rows(st, &marks, &e));
+            continue;
+        }
         match &st.mode {
             Mode::Edit(e) if (e.range.pos.line..=e.range.end.line).contains(&ln) => {
                 if ln == e.range.pos.line {
@@ -511,20 +521,6 @@ fn upper(s: &str) -> String {
     s.to_uppercase()
 }
 
-/// Non-lifted shapes, or the most detailed lifted one when that's all there is.
-fn best(pts: Option<&Vec<Point>>) -> Vec<String> {
-    let Some(pts) = pts.filter(|p| !p.is_empty()) else { return vec![] };
-    let real: Vec<&Point> = pts.iter().filter(|p| !p.lifted).collect();
-    let mut out: Vec<String> = vec![];
-    let use_ = if real.is_empty() { vec![pts.iter().max_by_key(|p| p.text.len()).unwrap()] } else { real };
-    for p in use_ {
-        if !out.contains(&p.text) {
-            out.push(p.text.clone());
-        }
-    }
-    out
-}
-
 fn sig_text(an: &Analysis, name: &str) -> Option<Vec<String>> {
     let cases = an.checked.as_ref()?.signatures.get(name).filter(|c| !c.is_empty())?;
     Some(
@@ -545,23 +541,7 @@ fn sig_text(an: &Analysis, name: &str) -> Option<Vec<String>> {
 fn shapes_at(an: &Analysis, s: &Step) -> (Vec<String>, Vec<String>) {
     let Some(c) = &an.checked else { return (vec![], vec![]) };
     let k = (s.range.pos.line, s.range.pos.col);
-    (best(c.before.get(&k)), best(c.after.get(&k)))
-}
-
-fn hole_arrives(an: &Analysis, hole: &Step) -> Vec<String> {
-    let Some(c) = &an.checked else { return vec![] };
-    let mut out: Vec<String> = vec![];
-    for s in an.steps.iter().filter(|s| s.call() == Some(&hole.word)) {
-        for t in best(c.before.get(&(s.range.pos.line, s.range.pos.col))) {
-            if !out.contains(&t) {
-                out.push(t);
-            }
-        }
-    }
-    if out.is_empty() {
-        out = best(c.before.get(&(hole.range.pos.line, hole.range.pos.col)));
-    }
-    out
+    (crate::analysis::best(c.before.get(&k)), crate::analysis::best(c.after.get(&k)))
 }
 
 /// `HOLES n · ERRORS n · RUNS p/t`, in red where something needs doing.
@@ -591,6 +571,7 @@ fn bar(st: &State, f: &mut Frame) {
                 Tone::Ok => CALL,
                 Tone::No => ERR,
                 Tone::Cmd => FG,
+                Tone::Agent => DEF,
                 Tone::Plain => DIM,
             };
             f.msg.push(&upper(text), Style::plain(fg), None);
@@ -628,7 +609,7 @@ fn shape(an: &Analysis, t: &Target) -> Vec<Line> {
         Target::Step(id) => {
             let Some(s) = an.step(*id) else { return vec![] };
             if s.hole().is_some() {
-                let arr = hole_arrives(an, s);
+                let arr = an.arrives(s);
                 first.push(" HOLE ", Style { fg: HOLE_FG, bg: Some(HOLE), weight: 500, err: false }, None);
                 first.push(" IN ", fg, None);
                 first.push(&upper(&s.word), w, None);

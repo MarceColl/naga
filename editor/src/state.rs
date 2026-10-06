@@ -2,6 +2,8 @@
 //! event and returns the next state; the program text inside the analysis is the only data,
 //! and undo is a stack of earlier texts.
 use crate::analysis::{Analysis, Parent, Range, Step};
+use crate::agent::{self, Agent};
+use crate::claude::Fill;
 use crate::debug::{self, Debug, Move};
 use crate::ops;
 use crate::view::Target;
@@ -55,6 +57,7 @@ pub enum Tone {
     Ok,
     No,
     Cmd,
+    Agent,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +72,10 @@ pub enum Event {
     Scroll(f32),
     /// How many code rows fit, and which program line each displayed row shows.
     Viewport(usize, Vec<usize>),
+    /// Claude's answer to the agent with this id.
+    AgentReply(u64, Result<Fill, String>),
+    /// Time passes: the agent types a little more of its fill.
+    Tick,
 }
 
 /// A table's rows, as seeded (`run: None`) or after a run.
@@ -83,6 +90,10 @@ pub struct State {
     pub an: Rc<Analysis>,
     pub data: Option<Data>,
     pub debug: Option<Debug>,
+    pub agent: Option<Agent>,
+    /// A question for Claude, waiting to be sent: the agent's id and the prompt.
+    pub ask: Option<(u64, String)>,
+    pub agents: u64,
     pub undo: Vec<String>,
     pub sel: Option<Sel>,
     /// Where a shift-extended selection started.
@@ -106,6 +117,9 @@ impl State {
             an: Rc::new(Analysis::new(text)),
             data: None,
             debug: None,
+            agent: None,
+            ask: None,
+            agents: 0,
             undo: vec![],
             sel: None,
             anchor: None,
@@ -259,8 +273,75 @@ fn debugging(st: State, mut d: Debug, ev: Event) -> State {
     reveal_line(State { debug: Some(d), ..st }, line)
 }
 
+/// Hands the hole to Claude. `base` is what its fills are judged against; `original` is the
+/// code a rework replaced.
+fn start_agent(st: State, hole: usize, label: &str, base: Rc<Analysis>, original: Option<String>) -> State {
+    let Some(h) = st.an.step(hole).cloned() else { return st };
+    let id = st.agents + 1;
+    let a = Agent { id, hole, label: label.into(), tries: 0, fill: None, shown: 0, base, original, rejected: None };
+    let ask = Some((id, agent::prompt(&st.an, &h, &a)));
+    State { agent: Some(a), ask, agents: id, sel: None, hover: None, ..st }.say(format!("agent › {label} · try 1 · asking Claude · esc stops it"), Tone::Agent)
+}
+
+fn agent_event(st: State, mut a: Agent, ev: Event) -> State {
+    let (label, n) = (a.label.clone(), a.tries);
+    match ev {
+        Event::Key(Key::Escape, _) => State { agent: None, ..st }.say("agent stopped — the hole is still open", Tone::Plain),
+        Event::AgentReply(id, _) if id != a.id => st,
+        Event::AgentReply(_, Err(e)) => give_up(st, a, &e),
+        Event::AgentReply(_, Ok(fill)) => {
+            let why = fill.why.clone();
+            a.tries += 1;
+            a.fill = Some(fill);
+            a.shown = 0;
+            State { agent: Some(a), ..st }.say(format!("agent › {label} · try {} · writing · {why}", n + 1), Tone::Agent)
+        }
+        Event::Tick => {
+            let Some(fill) = a.fill.clone() else { return State { agent: Some(a), ..st } };
+            let len = fill.text().chars().count();
+            if a.shown < len {
+                a.shown = (a.shown + 3).min(len);
+                return State { agent: Some(a), ..st };
+            }
+            let Some(h) = st.an.step(a.hole).cloned() else { return give_up(st, a, "the hole moved") };
+            let cand = Analysis::new(&ops::fill(&st.an, &h, &fill.code, fill.helpers.as_deref()));
+            match agent::judge(&a.base, &cand) {
+                Ok(()) => take(State { agent: None, ..st }, cand, &format!("agent › {label} · try {n} ✓")),
+                Err(why) if n < agent::TRIES => {
+                    a.rejected = Some((fill, why.clone()));
+                    a.fill = None;
+                    let ask = Some((a.id, agent::prompt(&st.an, &h, &a)));
+                    State { agent: Some(a), ask, ..st }.say(format!("agent › {label} · try {n} ✗ {why} · asking again"), Tone::No)
+                }
+                Err(why) => give_up(st, a, &why),
+            }
+        }
+        Event::Viewport(..) | Event::Scroll(_) | Event::Hover(..) => {
+            let st = update(State { agent: None, ..st }, ev);
+            State { agent: Some(a), ..st }
+        }
+        _ => State { agent: Some(a), ..st },
+    }
+}
+
+/// The agent stops: a rework puts the original back, a hole stays open.
+fn give_up(st: State, a: Agent, why: &str) -> State {
+    let st = State { agent: None, ..st };
+    match (&a.original, st.an.step(a.hole).cloned()) {
+        (Some(o), Some(h)) => match parse_ok(&ops::fill(&st.an, &h, o, None)) {
+            Ok(an) => take(st, an, &format!("rework: nothing better ({why}) — put the original back")),
+            Err(_) => st.say(format!("rework: nothing better ({why})"), Tone::No),
+        },
+        _ => st.say(format!("agent › {} · gave up after {} tries — the hole is yours: {why}", a.label, a.tries), Tone::No),
+    }
+}
+
 pub fn update(st: State, ev: Event) -> State {
+    if let Some(a) = st.agent.clone() {
+        return agent_event(st, a, ev);
+    }
     match (&st.mode, ev) {
+        (_, Event::AgentReply(..) | Event::Tick) => st,
         (_, Event::Viewport(rows, lines)) => State { rows, row_lines: Rc::new(lines), ..st },
         (Mode::Idle, ev) if st.debug.is_some() && !matches!(ev, Event::Scroll(_)) => {
             let d = st.debug.clone().unwrap();
@@ -402,7 +483,21 @@ fn run(st: State, raw: &str) -> State {
             };
             start_debug(st, i)
         }
-        "rework" => st.say(format!("{op} isn’t built yet"), Tone::No),
+        "rework" => {
+            let Some(ids) = &ids else { return st.say(need("steps"), Tone::No) };
+            let punched = ops::punch(&an, ids, &arg).and_then(|(text, original, note)| Ok((parse_ok(&text)?, original, note)));
+            match punched {
+                Err(why) => st.say(why, Tone::No),
+                Ok((after, original, note)) => {
+                    let st = take(st, after, "");
+                    let hole = st.an.holes().find(|h| h.hole().map(str::trim) == Some(note.as_str())).map(|h| h.id);
+                    match hole {
+                        Some(h) => start_agent(st, h, "rework", an, Some(original)),
+                        None => st.say("rework: the hole went missing", Tone::No),
+                    }
+                }
+            }
+        }
         _ => st.say(format!("{raw} isn’t an operation — try {}", OPS.join(" · ")), Tone::No),
     }
 }
@@ -417,7 +512,7 @@ fn idle(st: State, ev: Event) -> State {
         Event::Press(Some(Target::Step(id)), shift) => {
             let Some(s) = an.step(id) else { return st };
             if s.hole().is_some() {
-                return if shift { st.say("no agent yet — click the hole to write it yourself", Tone::No) } else { edit_hole(st, s) };
+                return if shift { start_agent(st.clone(), s.id, &s.word.clone(), st.an.clone(), None) } else { edit_hole(st, s) };
             }
             let anchor = st.anchor.and_then(|a| an.step(a));
             let (sel, anchor) = match anchor.filter(|_| shift).and_then(|a| Some((a, align(&an, s, &a.parent)?))) {
@@ -452,7 +547,10 @@ fn idle(st: State, ev: Event) -> State {
         },
         Event::Key(Key::Escape, _) => State { sel: None, hover: None, msg: None, ..st },
         Event::Key(Key::Enter, shift) => match &st.sel {
-            Some(Sel::Steps(ids)) if ids.len() == 1 && an.step(ids[0]).is_some_and(|s| s.hole().is_some()) && !shift => edit_hole(st.clone(), an.step(ids[0]).unwrap()),
+            Some(Sel::Steps(ids)) if ids.len() == 1 && an.step(ids[0]).is_some_and(|s| s.hole().is_some()) => {
+                let h = an.step(ids[0]).unwrap();
+                if shift { start_agent(st.clone(), h.id, &h.word, an.clone(), None) } else { edit_hole(st.clone(), h) }
+            }
             _ => st,
         },
         Event::Key(Key::Char(c), _) if c.is_alphabetic() => State { mode: Mode::Cmd(c.to_string()), ..st },
@@ -626,6 +724,48 @@ mod tests {
         let st = keys(st, &[(Key::Enter, false)]);
         assert_eq!(st.debug.as_ref().map(|d| d.now().st.status), Some(naga::machine::Status::Done));
         assert!(keys(st, &[(Key::Escape, false)]).debug.is_none());
+    }
+
+    fn reply(st: State, code: &str) -> State {
+        let id = st.agent.as_ref().unwrap().id;
+        let fill = Fill { code: code.into(), helpers: None, why: "test".into() };
+        let mut st = update(st, Event::AgentReply(id, Ok(fill)));
+        while st.agent.as_ref().is_some_and(|a| a.fill.is_some()) {
+            st = update(st, Event::Tick);
+        }
+        st
+    }
+
+    #[test]
+    fn the_agent_retries_with_the_reason_and_keeps_a_fill_that_passes() {
+        let src = "route GET /x = w\nw = ? answer one\nrun \"x\"\n  GET /x → 200 1\n";
+        let st = State::new(src);
+        let h = st.an.holes().next().unwrap().id;
+        let mut st = update(st, Event::Press(Some(Target::Step(h)), true));
+        let (id, prompt) = st.ask.take().expect("a question for Claude");
+        assert!(prompt.contains("Fill the hole in `w` on line 2: `? answer one`."), "{prompt}");
+        let st = reply(st, "+{status: 200, json: 2}");
+        let (id2, again) = st.ask.clone().expect("asks again");
+        assert_eq!(id2, id);
+        assert!(again.contains("Your previous fill was rejected") && again.contains("run “x” answers 200 2"), "{again}");
+        let st = reply(st, "+{status: 200, json: 1}");
+        assert!(st.agent.is_none());
+        assert!(st.an.text.contains("w = +{status: 200, json: 1}"), "{}", st.an.text);
+        assert_eq!(st.an.passing(), 1);
+    }
+
+    #[test]
+    fn a_rework_that_finds_nothing_better_puts_the_original_back() {
+        let src = "go = +{a: 1} -{a}\n";
+        let st = State::new(src);
+        let ids: Vec<usize> = st.an.steps.iter().map(|s| s.id).collect();
+        let st = State { sel: Some(Sel::Steps(ids)), ..st };
+        let mut st = update(typed(st, "rework"), Event::Key(Key::Enter, false));
+        assert!(st.an.text.starts_with("go = ? +{a: 1} -{a}"), "{}", st.an.text);
+        assert!(st.ask.take().unwrap().1.contains("This is a rework: the hole replaced `+{a: 1} -{a}`"));
+        let id = st.agent.as_ref().unwrap().id;
+        let st = update(st, Event::AgentReply(id, Err("Claude answered 529: overloaded".into())));
+        assert_eq!(st.an.text, "go = +{a: 1} -{a}\n");
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! `naga-edit file.nag`: the hole editor, drawn on the GPU.
+mod agent;
 mod analysis;
+mod claude;
 mod debug;
 mod gpu;
 mod ops;
@@ -10,12 +12,18 @@ use state::{Event, Key, State, update};
 use std::sync::Arc;
 use view::{Frame, view};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WKey, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
+/// What other threads wake the editor with: Claude's answer to an agent.
+enum Wake {
+    Reply(u64, Result<claude::Fill, String>),
+}
+
 struct App {
+    proxy: EventLoopProxy<Wake>,
     state: Option<State>,
     frame: Frame,
     gpu: Option<gpu::Gpu>,
@@ -29,7 +37,14 @@ struct App {
 impl App {
     fn send(&mut self, ev: Event) {
         let before = self.state.as_ref().map(|s| s.an.clone());
-        let next = update(self.state.take().expect("a state"), ev);
+        let mut next = update(self.state.take().expect("a state"), ev);
+        // a question for Claude goes out on its own thread; the answer comes back as a Wake
+        if let Some((id, prompt)) = next.ask.take() {
+            let proxy = self.proxy.clone();
+            std::thread::spawn(move || {
+                let _ = proxy.send_event(Wake::Reply(id, claude::ask(&prompt)));
+            });
+        }
         // the text is the program: every change to it goes straight to the file
         if before.is_some_and(|b| b.text != next.an.text)
             && let Err(e) = std::fs::write(&self.path, &next.an.text)
@@ -47,7 +62,27 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<Wake> for App {
+    fn user_event(&mut self, _: &ActiveEventLoop, w: Wake) {
+        let Wake::Reply(id, r) = w;
+        self.send(Event::AgentReply(id, r));
+    }
+
+    /// While the agent types its fill, time moves in 60ths of a second.
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        let typing = self.state.as_ref().and_then(|s| s.agent.as_ref()).is_some_and(|a| a.fill.is_some());
+        el.set_control_flow(match typing {
+            true => ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(16)),
+            false => ControlFlow::Wait,
+        });
+    }
+
+    fn new_events(&mut self, _: &ActiveEventLoop, cause: StartCause) {
+        if matches!(cause, StartCause::ResumeTimeReached { .. }) {
+            self.send(Event::Tick);
+        }
+    }
+
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.gpu.is_some() {
             return;
@@ -199,6 +234,7 @@ fn main() {
         return;
     }
     let frame = view(&state);
-    let mut app = App { state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path };
-    EventLoop::new().expect("an event loop").run_app(&mut app).expect("the editor runs");
+    let el = EventLoop::<Wake>::with_user_event().build().expect("an event loop");
+    let mut app = App { proxy: el.create_proxy(), state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path };
+    el.run_app(&mut app).expect("the editor runs");
 }

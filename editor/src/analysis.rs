@@ -1,7 +1,7 @@
 //! Everything the editor knows, recomputed from the program text: steps and their ranges,
 //! definitions, holes, errors, the checker's shapes, and the runs.
 use naga::ast::{Clause, Pos, Program, Stmt, StmtKind};
-use naga::check::{Checked, Checker};
+use naga::check::{Checked, Checker, Point};
 use naga::runs::{Outcome, run};
 use naga::syntax::parse;
 use naga::value::Name;
@@ -183,7 +183,39 @@ impl Analysis {
         store.and_then(|mut s| s.snapshot(&self.program).ok()).unwrap_or_default()
     }
 
+    /// The shapes a hole receives: what its word's callers pass, or what the checker saw at it.
+    pub fn arrives(&self, hole: &Step) -> Vec<String> {
+        let Some(c) = &self.checked else { return vec![] };
+        let mut out: Vec<String> = vec![];
+        for s in self.steps.iter().filter(|s| s.call() == Some(&hole.word)) {
+            for t in best(c.before.get(&(s.range.pos.line, s.range.pos.col))) {
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
+        if out.is_empty() {
+            out = best(c.before.get(&(hole.range.pos.line, hole.range.pos.col)));
+        }
+        out
+    }
+
     pub fn passing(&self) -> usize {
         self.runs.iter().filter(|r| r.verdict == naga::runs::Verdict::Pass).count()
     }
 }
+
+/// Non-lifted shapes, or the most detailed lifted one when that's all there is.
+pub fn best(pts: Option<&Vec<Point>>) -> Vec<String> {
+    let Some(pts) = pts.filter(|p| !p.is_empty()) else { return vec![] };
+    let real: Vec<&Point> = pts.iter().filter(|p| !p.lifted).collect();
+    let mut out: Vec<String> = vec![];
+    let use_ = if real.is_empty() { vec![pts.iter().max_by_key(|p| p.text.len()).unwrap()] } else { real };
+    for p in use_ {
+        if !out.contains(&p.text) {
+            out.push(p.text.clone());
+        }
+    }
+    out
+}
+

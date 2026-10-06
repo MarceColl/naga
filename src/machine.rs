@@ -130,11 +130,10 @@ fn match_entries(entries: &[PatEntry], r: &Rec) -> Result<Vec<Name>, String> {
             let Value::Rec(inner) = v else { return Err(format!("{} is {}, not a record", e.name, v.type_name())) };
             match_entries(sub, inner).map_err(|why| format!("{}: {why}", e.name))?;
         }
-        if let Some(lit) = &e.lit {
-            if !eqv(v, lit) {
+        if let Some(lit) = &e.lit
+            && !eqv(v, lit) {
                 return Err(format!("{} is {}, not {}", e.name, v.show(), lit.show()));
             }
-        }
         if e.mode == Mode::Take {
             take.push(e.name.clone());
         }
@@ -218,11 +217,10 @@ fn merge_branches(base: &Rec, results: &[Rc<Rec>]) -> Result<Rc<Rec>, RunError> 
     // field → (branch, new value or None for deleted)
     let mut changes: indexmap::IndexMap<Name, (usize, Option<Value>)> = Default::default();
     let mut note = |key: &Name, bi: usize, v: Option<Value>| -> Result<(), RunError> {
-        if let Some((prev, _)) = changes.get(key) {
-            if *prev != bi {
+        if let Some((prev, _)) = changes.get(key)
+            && *prev != bi {
                 return fail(format!("both sides of ‖ change {key} (side {} and side {})", prev + 1, bi + 1));
             }
-        }
         changes.insert(key.clone(), (bi, v));
         Ok(())
     };

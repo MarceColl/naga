@@ -323,11 +323,10 @@ impl Json<'_> {
                         }
                     }
                 }
-                if r.len() == 1 && r.contains_key("$sym") {
-                    if let Value::Text(s) = &r["$sym"] {
+                if r.len() == 1 && r.contains_key("$sym")
+                    && let Value::Text(s) = &r["$sym"] {
                         return Some(Value::Const(s.clone()));
                     }
-                }
                 Some(rec(r))
             }
             _ => {

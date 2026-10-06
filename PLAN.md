@@ -32,6 +32,11 @@ writes `tests/cases/*.nag` + `tests/golden/*.out`. `cargo test` diffs every case
 
 Checker before/after/head points, `previewSql`, per-step DB snapshots, sql.js driver, in-memory store.
 
+## Status
+
+Parity reached: 92 golden cases, stepping and incremental traces, and differential fuzzing
+(`spec/fuzz.js`; 2,900 mutants identical) all match the reference.
+
 ## Exactness hazards
 
 JS number formatting · `Math.round` half-up · UTF-16 `len` and columns · Map order (delete+set moves to end:

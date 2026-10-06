@@ -634,7 +634,7 @@ fn stmt(ts: &mut Ts) -> R<Vec<Stmt>> {
     match &start.t {
         Tk::Hole(note) => {
             ts.next();
-            return mk(StmtKind::Hole(note.clone()));
+            mk(StmtKind::Hole(note.clone()))
         }
         Tk::Op(op) => {
             match *op {
@@ -683,7 +683,7 @@ fn stmt(ts: &mut Ts) -> R<Vec<Stmt>> {
                 "‖" => return ts.err("‖ needs steps on both sides", Some(&start)),
                 _ => {}
             }
-            return ts.err(format!("unexpected “{}”", start.raw), Some(&start));
+            ts.err(format!("unexpected “{}”", start.raw), Some(&start))
         }
         Tk::Id(v) => {
             ts.next();

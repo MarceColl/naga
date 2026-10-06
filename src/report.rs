@@ -1,4 +1,5 @@
 //! The text `naga run` prints; `spec/report.js` prints the same from the reference engine.
+use crate::check::Checker;
 use crate::machine::{Session, Step};
 use crate::syntax::parse;
 
@@ -26,6 +27,23 @@ pub fn report(src: &str) -> String {
         out.push(format!("pause {}", s.pause));
         if let Some(store) = &s.store {
             out.extend(store.log.iter().map(|(t, l)| format!("sql [{t}] {l}")));
+        }
+    }
+    let r = Checker::default().check(&p, entry.as_ref());
+    out.push(format!("check {} errors", r.errors.len()));
+    out.extend(r.errors.iter().map(|e| format!("  ✗ {}:{} {}", e.line, e.col, e.msg)));
+    for n in p.words.keys() {
+        let cases = r.signatures.get(n).map(Vec::as_slice).unwrap_or_default();
+        if cases.is_empty() {
+            out.push(format!("sig {n} : (none)"));
+        }
+        for c in cases {
+            let res = match &c.fail {
+                Some(f) => format!("✗ {f}"),
+                None if c.out.is_empty() => "never returns".into(),
+                None => c.out.join(" | "),
+            };
+            out.push(format!("sig {n} : {} → {res}{}", c.input, if c.guard { "   (guarded)" } else { "" }));
         }
     }
     out.push(String::new());

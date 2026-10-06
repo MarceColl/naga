@@ -75,6 +75,7 @@ pub struct Error {
 }
 
 pub struct Analysis {
+    pub text: String,
     pub lines: Vec<Vec<char>>,
     pub program: Program,
     pub checked: Option<Checked>,
@@ -104,7 +105,7 @@ impl Analysis {
             checked = Some(c);
             runs = program.runs.iter().map(|r| run(&program, r)).collect();
         }
-        let mut an = Analysis { lines, program, checked, errors, runs, steps: vec![], by_id: HashMap::new(), defs: vec![], cells: vec![] };
+        let mut an = Analysis { text: text.into(), lines, program, checked, errors, runs, steps: vec![], by_id: HashMap::new(), defs: vec![], cells: vec![] };
         let words: Vec<(Name, Vec<Clause>)> = an.program.words.values().map(|w| (w.name.clone(), w.clauses.clone())).collect();
         for (name, clauses) in words {
             for (ci, c) in clauses.iter().enumerate() {

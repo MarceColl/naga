@@ -1,6 +1,7 @@
 //! `naga-edit file.nag`: the hole editor, drawn on the GPU.
 mod analysis;
 mod gpu;
+mod ops;
 mod state;
 mod view;
 
@@ -26,7 +27,14 @@ struct App {
 
 impl App {
     fn send(&mut self, ev: Event) {
+        let before = self.state.as_ref().map(|s| s.an.clone());
         let next = update(self.state.take().expect("a state"), ev);
+        // the text is the program: every change to it goes straight to the file
+        if before.is_some_and(|b| b.text != next.an.text)
+            && let Err(e) = std::fs::write(&self.path, &next.an.text)
+        {
+            eprintln!("naga-edit: {}: {e}", self.path);
+        }
         self.frame = view(&next);
         self.state = Some(next);
         if let Some(g) = &self.gpu {
@@ -91,12 +99,21 @@ impl ApplicationHandler for App {
                 self.send(Event::Scroll(lines));
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                let key = match event.logical_key {
+                let command = self.mods.super_key() || self.mods.control_key();
+                let key = match &event.logical_key {
                     WKey::Named(NamedKey::ArrowLeft) => Key::Left,
                     WKey::Named(NamedKey::ArrowRight) => Key::Right,
                     WKey::Named(NamedKey::ArrowUp) => Key::Up,
                     WKey::Named(NamedKey::ArrowDown) => Key::Down,
                     WKey::Named(NamedKey::Escape) => Key::Escape,
+                    WKey::Named(NamedKey::Enter) => Key::Enter,
+                    WKey::Named(NamedKey::Backspace) => Key::Backspace,
+                    WKey::Named(NamedKey::Space) if !command => Key::Char(' '),
+                    WKey::Character(c) if command && c.eq_ignore_ascii_case("z") => Key::Undo,
+                    WKey::Character(c) if !command => match event.text.as_deref().and_then(|t| t.chars().next()) {
+                        Some(ch) => Key::Char(ch),
+                        None => return,
+                    },
                     _ => return,
                 };
                 self.send(Event::Key(key, self.mods.shift_key()));
@@ -106,7 +123,7 @@ impl ApplicationHandler for App {
     }
 }
 
-const USAGE: &str = "usage: naga-edit <file.nag> [--shot out.png [--keys right,shift+right,down,esc] [--click row:col] [--scroll lines] [--size 1280x860]]";
+const USAGE: &str = "usage: naga-edit <file.nag> [--shot out.png [--keys right,shift+right,down,enter,esc] [--type text] [--click line:col] [--scroll lines] [--size 1280x860]]";
 
 fn key(name: &str) -> Option<(Key, bool)> {
     let (shift, k) = name.strip_prefix("shift+").map_or((false, name), |k| (true, k));
@@ -116,6 +133,9 @@ fn key(name: &str) -> Option<(Key, bool)> {
         "up" => Key::Up,
         "down" => Key::Down,
         "esc" => Key::Escape,
+        "enter" => Key::Enter,
+        "backspace" => Key::Backspace,
+        "undo" => Key::Undo,
         _ => return None,
     };
     Some((k, shift))
@@ -139,14 +159,18 @@ fn shot(state: State, out: &str, opts: &std::collections::HashMap<&str, &str>) -
     if let Some(ev) = viewport(&g, &f, Some(&st)) {
         st = update(st, ev);
     }
+    // --click line:col, a program line
+    if let Some((l, c)) = opts.get("--click").and_then(|rc| rc.split_once(':')).and_then(|(r, c)| Some((r.parse::<usize>().ok()?, c.parse::<usize>().ok()?))) {
+        let t = view(&st).code.iter().find(|x| x.src == l).and_then(|x| x.target_at(c).cloned());
+        st = update(update(st, Event::Press(t.clone(), false)), Event::Release);
+        st = update(st, Event::Hover(t, false));
+    }
     for k in opts.get("--keys").map_or(vec![], |k| k.split(',').collect()) {
         let (k, shift) = key(k).ok_or(format!("naga-edit: unknown key {k}"))?;
         st = update(st, Event::Key(k, shift));
     }
-    if let Some((r, c)) = opts.get("--click").and_then(|rc| rc.split_once(':')).and_then(|(r, c)| Some((r.parse::<usize>().ok()?, c.parse::<usize>().ok()?))) {
-        let t = view(&st).code.get(r).and_then(|l| l.target_at(c).cloned());
-        st = update(update(st, Event::Press(t.clone(), false)), Event::Release);
-        st = update(st, Event::Hover(t, false));
+    for c in opts.get("--type").copied().unwrap_or("").chars() {
+        st = update(st, Event::Key(Key::Char(c), false));
     }
     let f = view(&st);
     g.draw(&f, st.scroll);

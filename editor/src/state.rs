@@ -1,6 +1,8 @@
 //! The editor's state and the one function that changes it. `update` takes a state and an
-//! event and returns the next state; the program text inside the analysis is the only data.
-use crate::analysis::{Analysis, Parent, Step};
+//! event and returns the next state; the program text inside the analysis is the only data,
+//! and undo is a stack of earlier texts.
+use crate::analysis::{Analysis, Parent, Range, Step};
+use crate::ops;
 use crate::view::Target;
 use naga::value::Name;
 use std::rc::Rc;
@@ -13,9 +15,23 @@ pub enum Sel {
     Def(Name, usize),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Text typed in place of `range`: a hole's fill, or a rewrite of selected steps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Edit {
+    pub range: Range,
+    pub text: Vec<char>,
+    pub cursor: usize,
+    /// Rewriting existing steps rather than filling a hole.
+    pub rework: bool,
+    pub hole: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Mode {
     Idle,
+    /// A keyword operation being typed.
+    Cmd(String),
+    Edit(Edit),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +41,18 @@ pub enum Key {
     Up,
     Down,
     Escape,
+    Enter,
+    Backspace,
+    Char(char),
+    Undo,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    Plain,
+    Ok,
+    No,
+    Cmd,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -44,13 +72,14 @@ pub enum Event {
 #[derive(Clone)]
 pub struct State {
     pub an: Rc<Analysis>,
+    pub undo: Vec<String>,
     pub sel: Option<Sel>,
     /// Where a shift-extended selection started.
     pub anchor: Option<usize>,
     pub hover: Option<Target>,
     pub dragging: bool,
     pub mode: Mode,
-    pub msg: Option<String>,
+    pub msg: Option<(String, Tone)>,
     /// First row shown, in rows (fractional while scrolling).
     pub scroll: f32,
     /// Rows that fit on screen, and the program line of each row.
@@ -58,11 +87,69 @@ pub struct State {
     pub row_lines: Rc<Vec<usize>>,
 }
 
+pub const OPS: [&str; 10] = ["extract name", "inline", "hole note", "rework", "edit", "drop", "swap", "rename name", "data", "debug 1–7"];
+
 impl State {
     pub fn new(text: &str) -> State {
-        State { an: Rc::new(Analysis::new(text)), sel: None, anchor: None, hover: None, dragging: false, mode: Mode::Idle, msg: None, scroll: 0.0, rows: 0, row_lines: Rc::default() }
+        State {
+            an: Rc::new(Analysis::new(text)),
+            undo: vec![],
+            sel: None,
+            anchor: None,
+            hover: None,
+            dragging: false,
+            mode: Mode::Idle,
+            msg: None,
+            scroll: 0.0,
+            rows: 0,
+            row_lines: Rc::default(),
+        }
+    }
+    fn say(self, text: impl Into<String>, tone: Tone) -> State {
+        State { msg: Some((text.into(), tone)), ..self }
     }
 }
+
+/// `checker clean · runs 7/7`, or how many errors there are.
+pub fn status(an: &Analysis) -> String {
+    let checker = match an.errors.len() {
+        0 => "checker clean".to_string(),
+        1 => "1 checker error".to_string(),
+        n => format!("{n} checker errors"),
+    };
+    format!("{checker} · runs {}/{}", an.passing(), an.runs.len())
+}
+
+/// The analysis of `text`, when it parses.
+fn parse_ok(text: &str) -> Result<Analysis, String> {
+    let an = Analysis::new(text);
+    match an.program.errors.first() {
+        Some(e) => Err(e.msg.clone()),
+        None => Ok(an),
+    }
+}
+
+/// Makes `an` the program, keeping the old text for undo.
+fn take(st: State, an: Analysis, ok: &str) -> State {
+    let first = an.errors.first().map(|e| format!(" — {}", e.msg)).unwrap_or_default();
+    let msg = format!("{}{}{first}", if ok.is_empty() { String::new() } else { format!("{ok} · ") }, status(&an));
+    let tone = if an.errors.is_empty() { Tone::Ok } else { Tone::No };
+    let mut undo = st.undo.clone();
+    undo.push(st.an.text.clone());
+    State { an: Rc::new(an), undo, sel: None, anchor: None, hover: None, mode: Mode::Idle, ..st }.say(msg, tone)
+}
+
+fn commit_or_say(st: State, text: R, ok: &str) -> State {
+    match text {
+        Err(why) => st.say(why, Tone::No),
+        Ok(text) => match parse_ok(&text) {
+            Ok(an) => take(st, an, ok),
+            Err(why) => st.say(format!("that doesn’t parse: {why}"), Tone::No),
+        },
+    }
+}
+
+type R = ops::R<String>;
 
 /// `step`, or the ancestor of it that sits beside steps whose parent is `parent`.
 fn align<'a>(an: &'a Analysis, step: &'a Step, parent: &Parent) -> Option<&'a Step> {
@@ -84,14 +171,151 @@ fn one(s: &Step) -> (Option<Sel>, Option<usize>) {
     (Some(Sel::Steps(vec![s.id])), Some(s.id))
 }
 
+/// Writing a hole's fill, from the hole to the end of its line.
+fn edit_hole(st: State, h: &Step) -> State {
+    let line = h.range.pos.line;
+    let range = Range { pos: h.range.pos, end: naga::ast::Pos { line, col: st.an.lines[line - 1].len() } };
+    let e = Edit { range, text: vec![], cursor: 0, rework: false, hole: Some(h.id) };
+    State { mode: Mode::Edit(e), sel: None, ..st }.say("write the fill · enter keeps it · shift-enter for a new line · esc leaves the hole", Tone::Cmd)
+}
+
 pub fn update(st: State, ev: Event) -> State {
+    match (&st.mode, ev) {
+        (_, Event::Viewport(rows, lines)) => State { rows, row_lines: Rc::new(lines), ..st },
+        (_, Event::Scroll(dy)) => State { scroll: (st.scroll + dy).clamp(0.0, st.row_lines.len() as f32), ..st },
+        (Mode::Edit(e), Event::Key(k, shift)) => {
+            let e = e.clone();
+            editing(st, e, k, shift)
+        }
+        (Mode::Edit(_), _) => st,
+        (Mode::Cmd(c), Event::Key(k, _)) => {
+            let c = c.clone();
+            command(st, c, k)
+        }
+        (_, ev @ Event::Press(..)) => idle(State { mode: Mode::Idle, ..st }, ev),
+        (_, ev) => idle(st, ev),
+    }
+}
+
+fn editing(st: State, mut e: Edit, k: Key, shift: bool) -> State {
+    match k {
+        Key::Escape => State { mode: Mode::Idle, ..st }.say("left as it was", Tone::Plain),
+        Key::Enter if !shift => finish(st, e),
+        Key::Enter | Key::Char(_) => {
+            e.text.insert(e.cursor, if let Key::Char(c) = k { c } else { '\n' });
+            e.cursor += 1;
+            State { mode: Mode::Edit(e), ..st }
+        }
+        Key::Backspace if e.cursor > 0 => {
+            e.cursor -= 1;
+            e.text.remove(e.cursor);
+            State { mode: Mode::Edit(e), ..st }
+        }
+        Key::Left => State { mode: Mode::Edit(Edit { cursor: e.cursor.saturating_sub(1), ..e }), ..st },
+        Key::Right => State { mode: Mode::Edit(Edit { cursor: (e.cursor + 1).min(e.text.len()), ..e }), ..st },
+        _ => st,
+    }
+}
+
+fn finish(st: State, e: Edit) -> State {
+    let typed: String = e.text.iter().collect();
+    if typed.trim().is_empty() {
+        return State { mode: Mode::Idle, ..st }.say("empty — nothing changed", Tone::Plain);
+    }
+    let an = st.an.clone();
+    let (text, ok) = match e.hole.and_then(|h| an.step(h)) {
+        Some(h) => (ops::fill(&an, h, &typed, None), format!("filled {}", h.word)),
+        None => (ops::edit_range(&an, e.range, &typed), "rewritten".into()),
+    };
+    match parse_ok(&text) {
+        Ok(an) => take(st, an, &ok),
+        Err(why) => State { mode: Mode::Edit(e), ..st }.say(format!("that doesn’t parse: {why} — fix it or esc"), Tone::No),
+    }
+}
+
+fn command(st: State, mut c: String, k: Key) -> State {
+    match k {
+        Key::Escape => State { mode: Mode::Idle, ..st },
+        Key::Enter => run(State { mode: Mode::Idle, ..st }, &c),
+        Key::Backspace => {
+            c.pop();
+            State { mode: if c.is_empty() { Mode::Idle } else { Mode::Cmd(c) }, ..st }
+        }
+        Key::Char(ch) => {
+            c.push(ch);
+            State { mode: Mode::Cmd(c), ..st }
+        }
+        _ => st,
+    }
+}
+
+/// A keyword operation on the selection: `extract name`, `inline`, `hole note`, …
+fn run(st: State, raw: &str) -> State {
+    let mut words = raw.split_whitespace();
+    let op = words.next().unwrap_or("").to_lowercase();
+    let arg = words.collect::<Vec<_>>().join(" ");
+    let an = st.an.clone();
+    let ids = match &st.sel {
+        Some(Sel::Steps(ids)) => Some(ids.clone()),
+        _ => None,
+    };
+    let call = ids.as_ref().filter(|i| i.len() == 1).and_then(|i| an.step(i[0])).and_then(|s| s.call().cloned());
+    let need = |what: &str| format!("select {what} first");
+    match op.as_str() {
+        "extract" | "factor" => match &ids {
+            Some(ids) => commit_or_say(st, ops::extract(&an, ids, &arg.to_lowercase()), &format!("extracted {}", arg.to_lowercase())),
+            None => st.say(need("steps"), Tone::No),
+        },
+        "inline" => match &ids {
+            Some(ids) => commit_or_say(st, ops::inline(&an, ids), &format!("inlined {}", call.as_deref().unwrap_or(""))),
+            None => st.say(need("a call"), Tone::No),
+        },
+        "drop" => match &ids {
+            Some(ids) => commit_or_say(st, ops::drop(&an, ids), "dropped"),
+            None => st.say(need("steps"), Tone::No),
+        },
+        "swap" => match &ids {
+            Some(ids) => commit_or_say(st, ops::swap(&an, ids), "swapped"),
+            None => st.say(need("two steps"), Tone::No),
+        },
+        "rename" => {
+            let word = match &st.sel {
+                Some(Sel::Def(n, _)) => Some(n.clone()),
+                _ => call,
+            };
+            match word {
+                Some(w) => commit_or_say(st, ops::rename(&an, &w, &arg.to_lowercase()), &format!("renamed {w} to {}", arg.to_lowercase())),
+                None => st.say("select a word name or a call to rename", Tone::No),
+            }
+        }
+        "hole" | "punch" => match &ids {
+            Some(ids) => commit_or_say(st, ops::punch(&an, ids, &arg).map(|p| p.0), "hole punched"),
+            None => st.say(need("steps"), Tone::No),
+        },
+        "edit" => match ids.as_ref().map(|ids| ops::sel_range(&an, ids)) {
+            Some(Ok(r)) => {
+                let text: Vec<char> = ops::one_line(&ops::slice(&an, r)).chars().collect();
+                let e = Edit { range: r, cursor: text.len(), text, rework: true, hole: None };
+                State { mode: Mode::Edit(e), sel: None, ..st }.say("rewrite it · enter keeps it · shift-enter for a new line · esc puts it back", Tone::Cmd)
+            }
+            _ => st.say(need("steps"), Tone::No),
+        },
+        "rework" | "data" | "debug" | "run" => st.say(format!("{op} isn’t built yet"), Tone::No),
+        _ => st.say(format!("{raw} isn’t an operation — try {}", OPS.join(" · ")), Tone::No),
+    }
+}
+
+fn idle(st: State, ev: Event) -> State {
     let an = st.an.clone();
     match ev {
         Event::Press(None, _) => State { sel: None, anchor: None, ..st },
         Event::Press(Some(Target::Def(name, line)), _) => State { sel: Some(Sel::Def(name, line)), anchor: None, ..st },
-        Event::Press(Some(Target::Table(_)), _) => st,
+        Event::Press(Some(Target::Table(_)), _) => st.say("data isn’t built yet", Tone::No),
         Event::Press(Some(Target::Step(id)), shift) => {
             let Some(s) = an.step(id) else { return st };
+            if s.hole().is_some() {
+                return if shift { st.say("no agent yet — click the hole to write it yourself", Tone::No) } else { edit_hole(st, s) };
+            }
             let anchor = st.anchor.and_then(|a| an.step(a));
             let (sel, anchor) = match anchor.filter(|_| shift).and_then(|a| Some((a, align(&an, s, &a.parent)?))) {
                 Some((a, b)) => (Some(range(&an, a, b)), Some(a.id)),
@@ -113,11 +337,25 @@ pub fn update(st: State, ev: Event) -> State {
         }
         Event::Hover(t, _) => State { hover: t, ..st },
         Event::Release => State { dragging: false, ..st },
-        Event::Scroll(dy) => State { scroll: (st.scroll + dy).clamp(0.0, st.row_lines.len() as f32), ..st },
-        Event::Viewport(rows, lines) => State { rows, row_lines: Rc::new(lines), ..st },
+        Event::Key(Key::Undo, _) => match st.undo.last().cloned() {
+            None => st.say("nothing to undo", Tone::Plain),
+            Some(text) => {
+                let mut undo = st.undo.clone();
+                undo.pop();
+                let an = Analysis::new(&text);
+                let msg = format!("undone · {}", status(&an));
+                State { an: Rc::new(an), undo, sel: None, anchor: None, hover: None, ..st }.say(msg, Tone::Plain)
+            }
+        },
         Event::Key(Key::Escape, _) => State { sel: None, hover: None, msg: None, ..st },
+        Event::Key(Key::Enter, shift) => match &st.sel {
+            Some(Sel::Steps(ids)) if ids.len() == 1 && an.step(ids[0]).is_some_and(|s| s.hole().is_some()) && !shift => edit_hole(st.clone(), an.step(ids[0]).unwrap()),
+            _ => st,
+        },
+        Event::Key(Key::Char(c), _) if c.is_alphabetic() => State { mode: Mode::Cmd(c.to_string()), ..st },
         Event::Key(k @ (Key::Left | Key::Right), shift) => reveal(step_along(st, if k == Key::Right { 1 } else { -1 }, shift)),
         Event::Key(k @ (Key::Up | Key::Down), _) => reveal(step_across(st, k == Key::Up)),
+        _ => st,
     }
 }
 
@@ -195,11 +433,11 @@ fn step_across(st: State, up: bool) -> State {
 mod tests {
     use super::*;
 
-    const SRC: &str = "go = a @f( b c ) d\na = nop\nb = nop\nc = nop\nd = nop\n";
+    const SRC: &str = "go = a @f( b c ) d\na = nop\nb = nop\nc = nop\nd = nop\nh = ? write me\n";
 
     fn names(st: &State) -> Vec<String> {
         match &st.sel {
-            Some(Sel::Steps(ids)) => ids.iter().map(|&i| st.an.lines[st.an.step(i).unwrap().range.pos.line - 1][st.an.step(i).unwrap().range.pos.col..st.an.step(i).unwrap().range.end.col].iter().collect()).collect(),
+            Some(Sel::Steps(ids)) => ids.iter().map(|&i| ops::slice(&st.an, st.an.step(i).unwrap().range)).collect(),
             _ => vec![],
         }
     }
@@ -208,16 +446,21 @@ mod tests {
         ks.iter().fold(st, |s, &(k, shift)| update(s, Event::Key(k, shift)))
     }
 
+    fn typed(st: State, s: &str) -> State {
+        s.chars().fold(st, |st, c| update(st, Event::Key(if c == '\n' { Key::Enter } else { Key::Char(c) }, c == '\n')))
+    }
+
+    fn id(st: &State, text: &str) -> usize {
+        st.an.steps.iter().find(|s| ops::slice(&st.an, s.range) == text).unwrap().id
+    }
+
     #[test]
     fn arrows_walk_siblings_in_and_out() {
-        let st = State::new(SRC);
-        let st = keys(st, &[(Key::Right, false)]);
+        let st = keys(State::new(SRC), &[(Key::Right, false)]);
         assert_eq!(names(&st), ["a"]);
         let st = keys(st, &[(Key::Right, false)]);
         assert_eq!(names(&st), ["@f( b c )"]);
-        let st = keys(st, &[(Key::Down, false)]);
-        assert_eq!(names(&st), ["b"]);
-        let st = keys(st, &[(Key::Right, true)]);
+        let st = keys(st, &[(Key::Down, false), (Key::Right, true)]);
         assert_eq!(names(&st), ["b", "c"]);
         let st = keys(st, &[(Key::Up, false), (Key::Right, false)]);
         assert_eq!(names(&st), ["d"]);
@@ -226,10 +469,40 @@ mod tests {
     #[test]
     fn shift_click_selects_siblings_even_from_inside() {
         let st = State::new(SRC);
-        let id = |st: &State, text: &str| st.an.steps.iter().find(|s| st.an.lines[0][s.range.pos.col..s.range.end.col].iter().collect::<String>() == text).unwrap().id;
         let (a, c) = (id(&st, "a"), id(&st, "c"));
-        let st = update(st, Event::Press(Some(Target::Step(a)), false));
-        let st = update(update(st, Event::Release), Event::Press(Some(Target::Step(c)), true));
+        let st = update(update(st, Event::Press(Some(Target::Step(a)), false)), Event::Release);
+        let st = update(st, Event::Press(Some(Target::Step(c)), true));
         assert_eq!(names(&st), ["a", "@f( b c )"]);
+    }
+
+    #[test]
+    fn commands_change_the_text_and_undo_puts_it_back() {
+        let st = State::new(SRC);
+        let st = update(st.clone(), Event::Press(Some(Target::Step(id(&st, "d"))), false));
+        let st = update(typed(st, "drop"), Event::Key(Key::Enter, false));
+        assert!(st.an.text.starts_with("go = a @f( b c )\n"), "{}", st.an.text);
+        assert_eq!(st.msg.as_ref().map(|m| m.1), Some(Tone::Ok));
+        let st = update(st, Event::Key(Key::Undo, false));
+        assert_eq!(st.an.text, SRC);
+        let st = update(typed(st, "frobnicate"), Event::Key(Key::Enter, false));
+        assert_eq!(st.msg.as_ref().map(|m| m.1), Some(Tone::No));
+    }
+
+    #[test]
+    fn clicking_a_hole_writes_its_fill() {
+        let st = State::new(SRC);
+        let h = st.an.holes().next().unwrap().id;
+        let st = update(st, Event::Press(Some(Target::Step(h)), false));
+        assert!(matches!(st.mode, Mode::Edit(_)));
+        let st = typed(st, "+{x: 1}\nsay \"hi\"");
+        let st = update(st, Event::Key(Key::Enter, false));
+        assert!(st.an.text.ends_with("h = +{x: 1}\n  say \"hi\"\n"), "{}", st.an.text);
+        assert_eq!(st.an.holes().count(), 0);
+        // a fill that doesn't parse stays open
+        let h2 = State::new(SRC);
+        let hid = h2.an.holes().next().unwrap().id;
+        let st = typed(update(h2, Event::Press(Some(Target::Step(hid)), false)), "+{");
+        let st = update(st, Event::Key(Key::Enter, false));
+        assert!(matches!(st.mode, Mode::Edit(_)), "{:?}", st.msg);
     }
 }

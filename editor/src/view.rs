@@ -1,13 +1,14 @@
 //! The screen as data: what to draw, in which colours, and what each piece of text points at.
 //! colorForth-style: one screen of code on black, colour as meaning, one status line at the bottom.
 use crate::analysis::{Analysis, Range, Step};
-use crate::state::{Mode, Sel, State};
+use crate::state::{Edit, Mode, OPS, Sel, State, Tone};
 use naga::check::Point;
 use naga::value::Name;
 
 pub type Color = [u8; 3];
 
 pub mod palette {
+    pub const EDIT: Color = [0x1E, 0x1E, 0x1E];
     use super::Color;
     pub const BG: Color = [0x00, 0x00, 0x00];
     pub const FG: Color = [0xEC, 0xEC, 0xEC];
@@ -268,7 +269,18 @@ pub fn view(st: &State) -> Frame {
             continue;
         }
         folding = false;
-        code.push(code_line(st, &marks, ln));
+        match &st.mode {
+            Mode::Edit(e) if (e.range.pos.line..=e.range.end.line).contains(&ln) => {
+                if ln == e.range.pos.line {
+                    code.extend(edit_rows(st, &marks, e));
+                }
+            }
+            _ => {
+                let mut line = Line { src: ln, ..Line::default() };
+                code_spans(st, &marks, ln, 0, chars.len(), &mut line);
+                code.push(line);
+            }
+        }
     }
     let mut f = Frame { code, ..Frame::default() };
     bar(st, &mut f);
@@ -292,7 +304,39 @@ fn seed_line(an: &Analysis, li: usize) -> Line {
     line
 }
 
-fn code_line(st: &State, m: &Marks, ln: usize) -> Line {
+/// The rows of a line being edited: what's before the edit, the typed text with its caret
+/// (one row per typed line), and what's after it.
+fn edit_rows(st: &State, m: &Marks, e: &Edit) -> Vec<Line> {
+    let (ln, end) = (e.range.pos.line, e.range.end);
+    let style = match e.rework {
+        true => Style { fg: FG, bg: Some(EDIT), weight: 700, err: false },
+        false => Style { fg: HOLE_FG, bg: Some(HOLE), weight: 700, err: false },
+    };
+    let caret = Style { fg: style.bg.unwrap_or(BG), bg: Some(style.fg), ..style };
+    let mut rows = vec![Line { src: ln, ..Line::default() }];
+    code_spans(st, m, ln, 0, e.range.pos.col, &mut rows[0]);
+    for (i, &c) in e.text.iter().enumerate() {
+        let row = rows.last_mut().unwrap();
+        match c {
+            '\n' => {
+                if i == e.cursor {
+                    row.push(" ", caret, None);
+                }
+                rows.push(Line { src: ln, ..Line::default() });
+            }
+            c => row.push(&c.to_string(), if i == e.cursor { caret } else { style }, None),
+        }
+    }
+    let last = rows.last_mut().unwrap();
+    if e.cursor == e.text.len() {
+        last.push(" ", caret, None);
+    }
+    code_spans(st, m, end.line, end.col, st.an.lines[end.line - 1].len(), last);
+    rows
+}
+
+/// The characters `a..b` of program line `ln`, styled, onto `line`.
+fn code_spans(st: &State, m: &Marks, ln: usize, a: usize, b: usize, line: &mut Line) {
     let an = &st.an;
     let chars = &an.lines[ln - 1];
     let cls = classes(chars);
@@ -300,8 +344,7 @@ fn code_line(st: &State, m: &Marks, ln: usize) -> Line {
     let def = an.def_at(ln);
     let hole = an.holes().find(|h| h.range.pos.line == ln);
     let table_decl = chars.iter().collect::<String>().strip_prefix("table").filter(|r| r.starts_with(' ')).map(|r| r.split_whitespace().next().unwrap_or("").to_string());
-    let mut line = Line { src: ln, ..Line::default() };
-    for (i, &ch) in chars.iter().enumerate() {
+    for (i, &ch) in chars.iter().enumerate().take(b).skip(a) {
         let sid = row[i];
         let step = (sid != 0).then(|| an.step(sid)).flatten();
         let mut style = class_style(cls[i]);
@@ -335,7 +378,6 @@ fn code_line(st: &State, m: &Marks, ln: usize) -> Line {
         style.err = (sid != 0 && m.err_steps.contains(&sid)) || (in_def && m.err_lines.contains(&ln));
         line.push(&c.to_string(), style, target);
     }
-    line
 }
 
 // ---------- the status bar ----------
@@ -406,7 +448,24 @@ fn bar(st: &State, f: &mut Frame) {
     f.stat.push(" · ", dim, None);
     f.stat.push(&format!("ERRORS {errs}"), if errs > 0 { Style::plain(ERR) } else { dim }, None);
     f.stat.push(&format!(" · RUNS {}/{}", an.passing(), an.runs.len()), dim, None);
-    f.msg.push(&upper(st.msg.as_deref().unwrap_or(HINT)), dim, None);
+    match (&st.mode, &st.msg) {
+        (Mode::Cmd(c), _) => {
+            let first = c.split_whitespace().next().unwrap_or("").to_lowercase();
+            let sug: Vec<&str> = OPS.iter().copied().filter(|o| o.starts_with(&first)).collect();
+            f.msg.push(&format!("▸ {}▌", upper(c)), Style::plain(FG), None);
+            f.msg.push(&format!("  {}", upper(&sug.join(" · "))), dim, None);
+        }
+        (_, Some((text, tone))) => {
+            let fg = match tone {
+                Tone::Ok => CALL,
+                Tone::No => ERR,
+                Tone::Cmd => FG,
+                Tone::Plain => DIM,
+            };
+            f.msg.push(&upper(text), Style::plain(fg), None);
+        }
+        (_, None) => f.msg.push(&upper(HINT), dim, None),
+    }
     let target = st.hover.clone().or_else(|| match &st.sel {
         Some(Sel::Def(n, l)) => Some(Target::Def(n.clone(), *l)),
         Some(Sel::Steps(ids)) => ids.last().map(|&i| Target::Step(i)),

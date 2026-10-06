@@ -1,0 +1,8 @@
+warn 2 this g clause never runs: the one on line 1 matches everything
+run done after 2 steps
+subj {}
+pause done
+check 0 errors
+sig g : {..r} → {..r}
+sig g : {..r, a} → {..r, a}
+sig main : {..r} → {..r}

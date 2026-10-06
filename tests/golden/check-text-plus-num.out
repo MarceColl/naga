@@ -1,0 +1,6 @@
+run error after 3 steps: can't use + on a string and a number ("a" + 1) — use ++ to join text @1
+subj {x: "a"}
+pause error
+check 1 errors
+  ✗ 1:17 can't use + on Text and Num — use ++ to join text
+sig main : {..r, ¬x} → ✗ stops with an error (see Notes)

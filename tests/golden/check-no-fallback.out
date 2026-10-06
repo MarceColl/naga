@@ -1,0 +1,59 @@
+run done after 31 steps
+> invoice 7: declined, retry 1
+> invoice 7 paid at step 28
+subj {id: 7, total: 120, card: {kind: Visa, balance: 10}, paidAt: 28}
+pause done
+check 1 errors
+  ✗ 8:18 no clause of settle matches {..r, declined: Insufficient, card, total, tries, ¬amount, ¬ok} (when main runs)
+sig main : {..r, ¬amount, ¬card, ¬due, ¬id, ¬ok, ¬paidAt, ¬total, ¬tries} → {..r, id: Num, total: Num, card: {kind: Visa, balance: Num}, paidAt: Num}
+sig main : {..r, ok, ¬amount, ¬card, ¬declined, ¬due, ¬id, ¬paidAt, ¬total, ¬tries} → {..r, id: Num, total: Num, card: {kind: Visa, balance: Num}, declined: Insufficient, paidAt: Num}
+sig main : {..r, ¬ok, ¬amount, ¬card, ¬declined, ¬due, ¬id, ¬paidAt, ¬total, ¬tries} → {..r, id: Num, total: Num, card: {kind: Visa, balance: Num}, paidAt: Num}
+sig main : {..r, ¬ok, ¬amount, ¬card, ¬declined, ¬due, ¬id, ¬total, ¬tries} → never returns
+sig main : {..r, ¬ok, ¬card, ¬id, ¬total} → ✗ no clause of settle matches {..r, declined: Insufficient, card, total, tries, ¬amount, ¬ok}
+sig invoice : {..r, card, id, total, ¬amount, ¬due, ¬ok, ¬paidAt, ¬tries} → {..r, card: {..c, balance: Num}, paidAt: Num, total, id}
+sig invoice : {..r, card, ok, id, total, ¬amount, ¬declined, ¬due, ¬paidAt, ¬tries} → {..r, declined: Insufficient, paidAt: Num, total, id}
+sig invoice : {..r, card: [{.., balance: Num}], ¬ok, id, total, ¬amount, ¬declined, ¬due, ¬tries} → never returns
+sig invoice : {..r, card: {..c}, ¬ok, ¬due, ¬tries} → ✗ no clause of settle matches {..r, declined: Insufficient, card, total, tries, ¬amount, ¬ok}
+sig invoice : {..r, card: {..c, balance: Num}, ¬ok, id, total, ¬amount, ¬declined, ¬due, ¬paidAt, ¬tries} → {..r, card: {..c, balance: Num}, paidAt: Num, id, total}
+sig invoice : {..r, card: {..c, balance: Num}, ¬ok, id, total, ¬amount, ¬declined, ¬due, ¬tries} → never returns
+sig invoice : {..r, card, ¬ok, ¬due, ¬tries} → ✗ no clause of settle matches {..r, declined: Insufficient, card, total, tries, ¬amount, ¬ok}
+sig invoice : {..r, card, ¬ok, ¬due, ¬tries} → ✗ no clause of settle matches {..r, declined: Insufficient, card, total, tries, ¬amount, ¬ok}
+sig invoice : {..r, ¬card, ok, id, ¬declined, ¬due, ¬paidAt, ¬tries} → {..r, declined: NoCard, paidAt: Num, id}
+sig invoice : {..r, ¬card, ¬ok, ¬due, ¬tries} → ✗ wait needs card — the record here is {..r, tries: Num, ¬card, ¬declined}
+sig invoice : {..r, ¬card, ¬ok, ¬due, ¬tries} → ✗ no clause of settle matches {..r, declined: NoCard, tries, ¬card, ¬ok}
+sig finalize : {..r, ¬due, ¬tries} → {..r, due: Num, tries: Num}
+sig collect : {..r, card, due, total, tries, ¬amount, ¬ok, ¬paidAt} → {..r, card: {..c, balance: Num}, paidAt: Num, total}
+sig collect : {..r, card, ok, due, total, tries, ¬amount, ¬declined, ¬paidAt} → {..r, declined: Insufficient, paidAt: Num, total}
+sig collect : {..r, card: [{.., balance: Num}], ¬ok, tries, id, total, ¬amount, ¬declined} → never returns
+sig collect : {..r, card: {..c}, ¬ok, tries, total, ¬amount, ¬declined} → ✗ no clause of settle matches {..r, declined: Insufficient, card, total, tries, ¬amount, ¬ok}
+sig collect : {..r, card: {..c, balance: Num}, ¬ok, tries, due, id, total, ¬amount, ¬declined, ¬paidAt} → {..r, card: {..c, balance: Num}, paidAt: Num, total, id}
+sig collect : {..r, card: {..c, balance: Num}, ¬ok, tries, id, total, ¬amount, ¬declined} → never returns
+sig collect : {..r, card, ¬ok, tries, total, ¬amount, ¬declined} → ✗ no clause of settle matches {..r, declined: Insufficient, card, total, tries, ¬amount, ¬ok}
+sig collect : {..r, card, ¬ok, tries, total, ¬amount, ¬declined} → ✗ no clause of settle matches {..r, declined: Insufficient, card, total, tries, ¬amount, ¬ok}
+sig collect : {..r, card, ¬ok, ¬tries, total, ¬amount, ¬declined} → ✗ no clause of settle matches {..r, declined: Insufficient, card, total, ¬amount, ¬ok, ¬tries}
+sig collect : {..r, ¬card, ok, due, tries, ¬declined, ¬paidAt} → {..r, declined: NoCard, paidAt: Num}
+sig collect : {..r, ¬card, ¬ok, tries, ¬declined} → ✗ wait needs card — the record here is {..r, tries: Num, ¬card, ¬declined}
+sig collect : {..r, ¬card, ¬ok, tries, ¬declined} → ✗ no clause of settle matches {..r, declined: NoCard, tries, ¬card, ¬ok}
+sig collect : {..r, ¬card, ¬ok, ¬tries, ¬declined} → ✗ no clause of settle matches {..r, declined: NoCard, ¬card, ¬ok, ¬tries}
+sig charge : {..r, card, total, ¬amount, ¬ok} → {..r, card: {..c, balance: Num}, ok: Approved, total}
+sig charge : {..r, card, total, ¬amount, ¬declined} → {..r, declined: Insufficient, card: {..c}, total}
+sig charge : {..r, ¬declined} → {..r, declined: NoCard}
+sig gateway : {..r, amount, card: {..c, balance}, ¬ok} → {..r, card: {..c, balance: Num}, ok: Approved}   (guarded)
+sig gateway : {..r, amount, ¬declined} → {..r, declined: Insufficient}
+sig settle : {..r, ok, due, tries, ¬paidAt} → {..r, paidAt: Num}
+sig settle : {..r, declined, tries, card: [{.., balance: Num}], ok, due, id, total, ¬amount, ¬paidAt} → {..r, card: [{..c, balance: Num}], declined: Insufficient, paidAt: Num, id, total}   (guarded)
+sig settle : {..r, declined, tries, card: [{.., balance: Num}], ¬ok, id, total, ¬amount} → never returns   (guarded)
+sig settle : {..r, declined, tries, card: [{.., balance: Num}], ¬ok, id} → ✗ no clause of settle matches {..r, declined: Insufficient, card, total, tries, ¬amount, ¬ok}   (guarded)
+sig settle : {..r, declined, tries, card: {..c, balance: Num}, due, id, total, ¬amount, ¬ok, ¬paidAt} → {..r, card: {..c, balance: Num}, paidAt: Num, id, total}   (guarded)
+sig settle : {..r, declined, tries, card: {..c, balance: Num}, ok, due, id, total, ¬amount, ¬paidAt} → {..r, card: {..c, balance: Num}, declined: Insufficient, paidAt: Num, id, total}   (guarded)
+sig settle : {..r, declined, tries, card: {..c, balance: Num}, ¬ok, due, id, total, ¬amount, ¬paidAt} → {..r, card: {..c, balance: Num}, paidAt: Num, id, total}   (guarded)
+sig settle : {..r, declined, tries, card: {..c, balance: Num}, ¬ok, id, total, ¬amount} → never returns   (guarded)
+sig settle : {..r, declined, tries, card: {..c, balance: Num}, ¬ok, id} → ✗ no clause of settle matches {..r, declined: Insufficient, card, total, tries, ¬amount, ¬ok}   (guarded)
+sig settle : {..r, declined, tries, ¬card} → ✗ wait needs card — the record here is {..r, tries: Num, ¬card, ¬declined}   (guarded)
+sig fail : {..r, tries: Num} → {..r, tries: Num}
+sig wait : {..r, card: [{.., balance: Num}], id, tries} → {..r, card: [{..c, balance: Num}], id, tries}
+sig wait : {..r, card: {..c, balance: Num}, id, tries} → {..r, card: {..c, balance: Num}, id, tries}
+sig paid : {..r, due, tries, ¬paidAt} → {..r, paidAt: Num}
+sig void : {..r, due, tries, ¬voidedAt} → {..r, voidedAt: Num}
+sig report : {..r, paidAt, id} → {..r, paidAt, id}
+sig report : {..r, voidedAt, id} → {..r, voidedAt, id}

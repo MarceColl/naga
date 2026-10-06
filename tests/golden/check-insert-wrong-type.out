@@ -1,0 +1,7 @@
+run error after 3 steps: todos.done is Bool, but got a string "no" @2
+subj {todo: {title: "x", done: "no"}}
+pause error
+sql [-1] CREATE TABLE "todos" ("id" INTEGER PRIMARY KEY, "title" TEXT NOT NULL, "done" INTEGER NOT NULL)
+check 1 errors
+  ✗ 2:41 todos.done is Bool, so done needs Bool, got Text
+sig main : {..r, ¬todo} → ✗ stops with an error (see Notes)

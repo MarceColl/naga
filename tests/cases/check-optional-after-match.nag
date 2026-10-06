@@ -1,0 +1,4 @@
+table notes :: {body: Text, tag: Text?}
+main = notes.all @notes( show-tag )
+show-tag {tag} = say "{tag}"
+show-tag = nop

@@ -1,0 +1,1 @@
+main = +{x: {a: 1}, y: {b: 2}} +{u: x ⊔ y} say u.b

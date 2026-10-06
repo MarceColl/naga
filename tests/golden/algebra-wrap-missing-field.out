@@ -1,0 +1,6 @@
+run error after 3 steps: needs field b @1
+subj {a: 1}
+pause error
+check 1 errors
+  ✗ 1:15 main needs b, but nothing on this path provides it (main) (when main runs)
+sig main : {..r, b, ¬a, ¬t} → {..r, t: {a: Num, b}}

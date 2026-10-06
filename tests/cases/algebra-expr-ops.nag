@@ -1,0 +1,1 @@
+main = +{x: {a: 1, b: 2}, y: {b: "s", c: 4}} +{m: x ⫽ y, n: x ⊓ y, d: x ∆ y} +{z: x ⍎ d} say z.c + 1 say m.b ++ "!"

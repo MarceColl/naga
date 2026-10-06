@@ -1,0 +1,8 @@
+run error after 5 steps: needs field balance @2
+subj {kind: Visa}
+pause error
+check 1 errors
+  ✗ 1:29 charge needs card.balance — the record here is {..r, card: {kind: Visa}}
+sig main : {..r, ¬card} → ✗ stops with an error (see Notes)
+sig charge : {..r, card: [{.., balance: Num}]} → {..r, card: [{..c, balance: Num}]}
+sig charge : {..r, card: {..c, balance: Num}} → {..r, card: {..c, balance: Num}}

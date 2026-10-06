@@ -1,0 +1,9 @@
+run done after 3 steps
+subj {notes: []}
+pause done
+sql [-1] CREATE TABLE "notes" ("id" INTEGER PRIMARY KEY, "body" TEXT NOT NULL, "tag" TEXT)
+sql [1] SELECT * FROM "notes" ORDER BY "id"
+check 0 errors
+sig main : {..r, ¬notes} → {..r, notes: [{id: Num, body: Text, tag?: Text}]}
+sig show-tag : {..r, tag} → {..r, tag}
+sig show-tag : {..r} → {..r}

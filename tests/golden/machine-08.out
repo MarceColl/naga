@@ -1,0 +1,6 @@
+run done after 5 steps
+> {c: {v: 6}, k: 5}
+subj {c: {v: 6}, k: 5}
+pause done
+check 0 errors
+sig main : {..r, ¬c, ¬k} → {..r, c: {v: Num}, k: Num}

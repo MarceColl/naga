@@ -1,0 +1,11 @@
+run error after 10 steps: needs field id @3
+subj {changes: {done: true}}
+pause error
+sql [-1] CREATE TABLE "todos" ("id" INTEGER PRIMARY KEY, "title" TEXT NOT NULL, "done" INTEGER NOT NULL)
+sql [4] UPDATE "todos" SET "done" = 1 WHERE "id" = 2
+check 1 errors
+  ✗ 2:25 finish needs id — the record here is {..r, ¬changes, ¬id, ¬missing, ¬todo}
+sig main : {..r, ¬changes, ¬id, ¬missing, ¬todo} → ✗ stops with an error (see Notes)
+sig finish : {..r, id: Num, ¬changes, ¬missing, ¬todo} → {..r}
+sig finished : {..r, missing} → {..r}
+sig finished : {..r, todo} → {..r}

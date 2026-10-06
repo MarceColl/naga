@@ -1,0 +1,103 @@
+run error after 37 steps: no clause of kind-ok matches {name: "Pets", kind: Animal} @68
+  why kind-ok {kind: Asset} — kind is Animal, not Asset
+  why kind-ok {kind: Liability} — kind is Animal, not Liability
+  why kind-ok {kind: Income} — kind is Animal, not Income
+  why kind-ok {kind: Expense} — kind is Animal, not Expense
+  why kind-ok {kind: Equity} — kind is Animal, not Equity
+> 200  {id: 1, name: "Checking", kind: Asset, archived: false, balance: 440000, recent: [{id: 1, tx-id: 1, account-id: 1, amount: 250000, date: "2026-09-01"}, {id: 3, tx-id: 2, account-id: 1, amount: 310000, date: "2026-09-25"}, {id: 6, tx-id: 3, account-id: 1, amount: -120000, date: "2026-09-27"}]}
+> 201  {id: 8, name: "Restaurants", kind: Expense, archived: false}
+subj {name: "Pets", kind: Animal}
+pause error
+sql [-1] CREATE TABLE "accounts" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL, "kind" TEXT NOT NULL, "archived" INTEGER NOT NULL)
+sql [-1] CREATE TABLE "transactions" ("id" INTEGER PRIMARY KEY, "date" TEXT NOT NULL, "payee" TEXT NOT NULL, "memo" TEXT)
+sql [-1] CREATE TABLE "postings" ("id" INTEGER PRIMARY KEY, "tx-id" INTEGER NOT NULL, "account-id" INTEGER NOT NULL, "amount" REAL NOT NULL, "date" TEXT NOT NULL)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Checking', 'Asset', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Savings', 'Asset', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Credit card', 'Liability', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Salary', 'Income', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Groceries', 'Expense', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Rent', 'Expense', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Opening balances', 'Equity', 0)
+sql [-1] INSERT INTO "transactions" ("date", "payee") VALUES ('2026-09-01', 'Opening balance')
+sql [-1] INSERT INTO "transactions" ("date", "payee") VALUES ('2026-09-25', 'Acme Payroll')
+sql [-1] INSERT INTO "transactions" ("date", "payee") VALUES ('2026-09-27', 'Landlord')
+sql [-1] INSERT INTO "postings" ("tx-id", "account-id", "amount", "date") VALUES (1, 1, 250000, '2026-09-01')
+sql [-1] INSERT INTO "postings" ("tx-id", "account-id", "amount", "date") VALUES (1, 7, -250000, '2026-09-01')
+sql [-1] INSERT INTO "postings" ("tx-id", "account-id", "amount", "date") VALUES (2, 1, 310000, '2026-09-25')
+sql [-1] INSERT INTO "postings" ("tx-id", "account-id", "amount", "date") VALUES (2, 4, -310000, '2026-09-25')
+sql [-1] INSERT INTO "postings" ("tx-id", "account-id", "amount", "date") VALUES (3, 6, 120000, '2026-09-27')
+sql [-1] INSERT INTO "postings" ("tx-id", "account-id", "amount", "date") VALUES (3, 1, -120000, '2026-09-27')
+sql [3] SELECT * FROM "accounts" WHERE "id" = 1
+sql [7] SELECT * FROM "postings" WHERE ("account-id" = 1) ORDER BY "id"
+sql [11] SELECT * FROM "postings" WHERE ("account-id" = 1) ORDER BY "id"
+sql [26] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Restaurants', 'Expense', 0)
+check 1 errors
+  ✗ 68:43 no clause of kind-ok matches {..b, name, kind}
+sig main : {..r, ¬account, ¬id, ¬json, ¬missing, ¬status} → {}
+sig main : {..r, ¬account, ¬id, ¬json, ¬missing, ¬status} → ✗ stops with an error (see Notes)
+sig show-reply : {..r, json, status} → {}
+sig reply : {..r, json, status} → {status, json}
+sig get-accounts : {..r, ¬accounts, ¬json, ¬status} → {status: Num, json: [{id: Num, name: Text, kind: Const, archived: Bool, balance: Num, ¬postings}]}
+sig with-balance : {..r, id, ¬balance, ¬postings} → {..r, balance: Num, id}
+sig get-account : {..r, id: Num, ¬account, ¬json, ¬missing, ¬status} → {status: Num, json: {id: Num, name: Text, kind: Const, archived: Bool, balance: Num, recent: [{id: Num, tx-id: Num, account-id: Num, amount: Num, date: Text}], ¬postings}} | {status: Num, json: Text}
+sig account-found : {..r, missing, ¬json, ¬status} → {..r, status: Num, json: Text}
+sig account-found : {..r, account: [{.., id, ¬balance, ¬postings, ¬recent}], ¬json, ¬status} → {..r, account: [{..a, balance: Num, recent: [{…}], id, ¬postings}], status: Num, json: [{..a, balance: Num, recent: [{…}], id, ¬postings}]}
+sig account-found : {..r, account: {..a, id, ¬balance, ¬postings, ¬recent}, ¬json, ¬status} → {..r, account: {..a, balance: Num, recent: [{id: Num, tx-id: Num, account-id: Num, amount: Num, date: Text}], id, ¬postings}, status: Num, json: {..a, balance: Num, recent: [{id: Num, tx-id: Num, account-id: Num, amount: Num, date: Text}], id, ¬postings}}
+sig recent : {..r, id, ¬postings, ¬recent} → {..r, recent: [{id: Num, tx-id: Num, account-id: Num, amount: Num, date: Text}], id}
+sig post-account : {..r, body: {..b, kind, name, problem}, ¬json, ¬status} → {status: Num, json}
+sig post-account : {..r, body: {..b, kind, name, ¬problem}, ¬account, ¬json, ¬status} → {status: Num, json: {id: Num, name: Text, kind: Const, archived: Bool}}
+sig post-account : {..r, body: {..b, kind, name}} → ✗ stops with an error (see Notes)
+sig post-account : {..r, ¬json, ¬status} → {status: Num, json: Text}
+sig kind-ok : {..r, kind: Asset} → {..r, kind: Asset}
+sig kind-ok : {..r, kind: Liability} → {..r, kind: Liability}
+sig kind-ok : {..r, kind: Income} → {..r, kind: Income}
+sig kind-ok : {..r, kind: Expense} → {..r, kind: Expense}
+sig kind-ok : {..r, kind: Equity} → {..r, kind: Equity}
+sig create-account : {..r, body: {..b, problem}, ¬json, ¬status} → {..r, status: Num, json, body: {..b, problem}}
+sig create-account : {..r, body: {..b, kind: Const, name: Text}, ¬account, ¬json, ¬status} → {..r, account: {id: Num, name: Text, kind: Const, archived: Bool}, status: Num, json: {id: Num, name: Text, kind: Const, archived: Bool}, body: {..b, name: Text, kind: Const}}
+sig patch-account : {..r, body: {..b ⊆ accounts}, id: Num, ¬account, ¬changes, ¬json, ¬missing, ¬status} → {status: Num, json: {id: Num, name: Text, kind: Const, archived: Bool}} | {status: Num, json: Text}
+sig account-updated : {..r, missing, ¬json, ¬status} → {..r, status: Num, json: Text}
+sig account-updated : {..r, account, ¬json, ¬status} → {..r, status: Num, json, account}
+sig delete-account : {..r, id, ¬json, ¬postings, ¬status} → {status: Num, json: Text}
+sig delete-account : {..r, id: Num, ¬deleted, ¬json, ¬missing, ¬postings, ¬status} → {status: Num, json: nil} | {status: Num, json: Text}
+sig can-delete : {..r, postings, ¬json, ¬status} → {..r, status: Num, json: Text, postings}   (guarded)
+sig can-delete : {..r, id: Num, ¬deleted, ¬json, ¬missing, ¬status} → {..r, status: Num, json: nil, id: Num} | {..r, status: Num, json: Text, id: Num}
+sig account-deleted : {..r, missing, ¬json, ¬status} → {..r, status: Num, json: Text}
+sig account-deleted : {..r, deleted, ¬json, ¬status} → {..r, status: Num, json: nil}
+sig get-transactions : {..r, account, ¬json, ¬postings, ¬status} → {status: Num, json: [{tx-id: Num, account-id: Num, amount: Num, date: Text, payee: Text, ¬id}]}
+sig get-transactions : {..r, ¬json, ¬status, ¬transactions} → {status: Num, json: [{id: Num, date: Text, payee: Text, memo?: Text}]}
+sig with-payee : {..r, id, tx-id: Num, ¬missing, ¬payee, ¬transaction} → {..r, payee: Text, tx-id: Num}
+sig attach-payee : {..r, transaction: {..t, payee}, id, ¬payee} → {..r, payee}
+sig attach-payee : {..r, missing, id, ¬payee} → {..r, payee: Text}
+sig get-transaction : {..r, id: Num, ¬json, ¬missing, ¬status, ¬transaction} → {status: Num, json: {id: Num, date: Text, payee: Text, memo?: Text, lines: [{id: Num, tx-id: Num, account-id: Num, amount: Num, date: Text}], ¬postings}} | {status: Num, json: Text}
+sig tx-found : {..r, missing, ¬json, ¬status} → {..r, status: Num, json: Text}
+sig tx-found : {..r, transaction: [{.., id, ¬lines, ¬postings}], ¬json, ¬status} → {..r, transaction: [{..t, lines: [{…}], id, ¬postings}], status: Num, json: [{..t, lines: [{…}], id, ¬postings}]}
+sig tx-found : {..r, transaction: {..t, id, ¬lines, ¬postings}, ¬json, ¬status} → {..r, transaction: {..t, lines: [{id: Num, tx-id: Num, account-id: Num, amount: Num, date: Text}], id, ¬postings}, status: Num, json: {..t, lines: [{id: Num, tx-id: Num, account-id: Num, amount: Num, date: Text}], id, ¬postings}}
+sig lines : {..r, id, ¬lines, ¬postings} → {..r, lines: [{id: Num, tx-id: Num, account-id: Num, amount: Num, date: Text}], id}
+sig post-transaction : {..r, body: {..b, date, payee, postings}, ¬json, ¬status} → {status: Num, json: Text}
+sig post-transaction : {..r, body: {..b, date, payee, postings: {..p}}, ¬json, ¬status} → {status: Num, json: Text}
+sig post-transaction : {..r, body: {..b, date, payee, postings: [{.., account-id: Num, ¬account, ¬bad, ¬id, ¬missing}]}, ¬json, ¬status} → {status: Num, json: Text}
+sig post-transaction : {..r, body: {..b, date, payee, postings: [{.., account-id: Num, ¬account, ¬bad, ¬id, ¬missing, ¬posting}]}, ¬json, ¬status, ¬transaction} → {status: Num, json: {id: Num, date: Text, payee: Text, memo?: Text}}
+sig post-transaction : {..r, ¬json, ¬status} → {status: Num, json: Text}
+sig check-lines : {..r, body: {..b, postings}, ¬json, ¬status} → {..r, status: Num, json: Text, body: {..b, postings}}   (guarded)
+sig check-lines : {..r, body: {..b, postings: [{.., amount}]}, ¬json, ¬status} → {..r, status: Num, json: Text, body: {..b, postings: [{..p, amount: Num}]}}   (guarded)
+sig check-lines : {..r, body: {..b, postings: [{.., account-id: Num, ¬account, ¬bad, ¬id, ¬missing}]}, ¬json, ¬status} → {..r, body: {..b, postings: [{..p, bad: Num, account-id: Num, ¬account, ¬id, ¬missing}]}, status: Num, json: Text}
+sig check-lines : {..r, body: {..b, postings: [{.., account-id: Num, amount: Num, ¬account, ¬bad, ¬id, ¬missing, ¬posting}], date: Text, payee: Text}, ¬json, ¬status, ¬transaction} → {..r, body: {..b, postings: [{..p, account-id: Num, amount: Num, ¬account, ¬bad, ¬id, ¬missing, ¬posting}], date: Text, payee: Text}, transaction: {id: Num, date: Text, payee: Text, memo?: Text}, status: Num, json: {id: Num, date: Text, payee: Text, memo?: Text}}
+sig check-lines : {..r, body: {..b, postings: {..p, account-id: Num, amount: Num, ¬account, ¬bad, ¬id, ¬missing, ¬posting}, date: Text, payee: Text}, ¬json, ¬status, ¬transaction} → {..r, body: {..b, postings: {..p, account-id: Num, amount: Num, ¬account, ¬bad, ¬id, ¬missing, ¬posting}, date: Text, payee: Text}, transaction: {id: Num, date: Text, payee: Text, memo?: Text}, status: Num, json: {id: Num, date: Text, payee: Text, memo?: Text}}
+sig check-account : {..r, account-id: Num, ¬account, ¬bad, ¬id, ¬missing} → {..r, bad: Num, account-id: Num}
+sig usable : {..r, missing, ¬bad} → {..r, bad: Num}
+sig usable : {..r, account: {..a, archived: true}, ¬bad} → {..r, bad: Num}
+sig usable : {..r, account, ¬bad} → {..r, bad: Num}
+sig count-problems : {..r, body: {..b, postings: [{.., bad}]}, ¬json, ¬status} → {..r, status: Num, json: Text, body: {..b, postings: [{..p, bad: Num}]}}   (guarded)
+sig count-problems : {..r, body: {..b, postings: [{.., account-id: Num, amount: Num, bad, ¬posting}], date: Text, payee: Text}, ¬json, ¬status, ¬transaction} → {..r, transaction: {id: Num, date: Text, payee: Text, memo?: Text}, body: {..b, postings: [{..p, account-id: Num, amount: Num, ¬bad, ¬posting}], date: Text, payee: Text}, status: Num, json: {id: Num, date: Text, payee: Text, memo?: Text}}
+sig count-problems : {..r, body: {..b, postings: {..p, account-id: Num, amount: Num, bad, ¬posting}, date: Text, payee: Text}, ¬json, ¬status, ¬transaction} → {..r, transaction: {id: Num, date: Text, payee: Text, memo?: Text}, body: {..b, postings: {..p, account-id: Num, amount: Num, ¬bad, ¬posting}, date: Text, payee: Text}, status: Num, json: {id: Num, date: Text, payee: Text, memo?: Text}}
+sig store-posting : {..r, account-id: Num, amount: Num, bad, ¬posting} inside ^{.., date: Text} inside ^^{.., transaction: {..t, id: Num}} → {..r, account-id: Num, amount: Num}
+sig delete-transaction : {..r, id: Num, ¬deleted, ¬json, ¬missing, ¬postings, ¬status} → {status: Num, json: nil} | {status: Num, json: Text}
+sig tx-deleted : {..r, missing, ¬json, ¬status} → {..r, status: Num, json: Text}
+sig tx-deleted : {..r, deleted, ¬json, ¬status} → {..r, status: Num, json: nil}
+sig get-balance-sheet : {..r, ¬assets, ¬equity, ¬json, ¬liabilities, ¬status} → {status: Num, json: {assets: Num, liabilities: Num, equity: Num, net-worth: Num}}
+sig kind-total : {..r, kind, ¬accounts, ¬total} → {..r, accounts: [{id: Num, name: Text, kind: Const, archived: Bool, balance: Num, ¬postings}], total: Num, kind}
+sig get-income : {..r, from, to, ¬expenses, ¬income, ¬json, ¬status} → {status: Num, json: {income: Num, expenses: Num, net: Num, by-account: [{name: Text, flow: Num}]}}
+sig get-income : {..r, ¬json, ¬status} → {status: Num, json: Text}
+sig kind-flow : {..r, kind, ¬accounts, ¬total} inside ^{.., from, to} → {..r, accounts: [{name: Text, flow: Num}], total: Num, kind}
+sig flow : {..r, id, ¬flow, ¬postings} inside ^^{.., from, to} → {..r, flow: Num, id}

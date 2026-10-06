@@ -1,0 +1,2 @@
+table todos :: {title: Text, done: Bool}
+main = +{id: 1} todos.get say "{todo.title}"

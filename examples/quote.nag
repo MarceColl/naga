@@ -1,0 +1,13 @@
+-- ‖ runs both sides on the same record and merges what they add.
+-- If both sides change the same field, that's an error.
+
+main = +{total: 100, country: ES, weight: 3} quote
+       say "{total} + {tax} tax + {shipping} shipping = {grand}"
+
+quote = (tax ‖ shipping) +{grand: total + tax + shipping}
+
+tax {country: ES} = +{tax: total * 0.21}
+tax               = +{tax: 0}
+
+shipping when weight > 2 = +{shipping: 12}
+shipping                 = +{shipping: 5}

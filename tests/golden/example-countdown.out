@@ -1,0 +1,11 @@
+run done after 13 steps
+> 3…
+> 2…
+> 1…
+> liftoff
+subj {n: 0}
+pause done
+check 0 errors
+sig main : {..r, ¬n} → {..r, n: Num}
+sig countdown : {..r, n: 0} → {..r, n: Num}
+sig countdown : {..r, n: Num} → {..r, n: Num}

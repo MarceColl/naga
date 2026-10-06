@@ -1,0 +1,1 @@
+main = +{x: {a: 1}} say x.{a b} say x.{a}.a + 1 say [x].{a}

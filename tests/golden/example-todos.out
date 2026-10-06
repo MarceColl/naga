@@ -1,0 +1,29 @@
+run done after 35 steps
+> added #4: Write migrations
+> finished #2: Add SQLite
+> no todo #9
+> 2 open:
+>   #3 Ship the debugger
+>   #4 Write migrations
+> removed 2 finished todos
+subj {}
+pause done
+sql [-1] CREATE TABLE "todos" ("id" INTEGER PRIMARY KEY, "title" TEXT NOT NULL, "done" INTEGER NOT NULL)
+sql [-1] INSERT INTO "todos" ("title", "done") VALUES ('Write the parser', 1)
+sql [-1] INSERT INTO "todos" ("title", "done") VALUES ('Add SQLite', 0)
+sql [-1] INSERT INTO "todos" ("title", "done") VALUES ('Ship the debugger', 0)
+sql [3] INSERT INTO "todos" ("title", "done") VALUES ('Write migrations', 0)
+sql [9] UPDATE "todos" SET "done" = 1 WHERE "id" = 2
+sql [17] UPDATE "todos" SET "done" = 1 WHERE "id" = 9
+sql [22] SELECT * FROM "todos" WHERE "done" = 0 AND (length("title") > 0) ORDER BY "id"
+sql [29] SELECT * FROM "todos" WHERE "done" = 1 ORDER BY "id"
+sql [31] DELETE FROM "todos" WHERE "id" = 1
+sql [32] DELETE FROM "todos" WHERE "id" = 2
+check 0 errors
+sig main : {..r, ¬changes, ¬id, ¬missing, ¬todo, ¬todos} → {..r}
+sig add : {..r, ¬todo} → {..r}
+sig finish : {..r, id: Num, ¬changes, ¬missing, ¬todo} → {..r}
+sig finished : {..r, missing, id} → {..r, id}
+sig finished : {..r, todo: {..t, title}, id} → {..r, id}
+sig list-open : {..r, ¬todos} → {..r}
+sig tidy : {..r, ¬todos} → {..r}

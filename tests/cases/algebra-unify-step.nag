@@ -1,0 +1,4 @@
+main = +{auth: {cid: 1}, body: {cid: 2}} go
+go = @body( ⊔{cid: ^auth.cid} ) after
+after {body: {conflict}} = say "conflict"
+after = say body.cid

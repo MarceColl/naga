@@ -1,0 +1,2 @@
+main = nop
+broken = +{a: 1} -{b}

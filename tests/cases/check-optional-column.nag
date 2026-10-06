@@ -1,0 +1,2 @@
+table notes :: {body: Text, tag: Text?}
+main = notes.all @notes( say "{tag}" )

@@ -1,0 +1,7 @@
+hole 1 main: decide later
+run hole after 2 steps
+  hole decide later
+subj {}
+pause hole
+check 0 errors
+sig main : {..r} → never returns

@@ -1,0 +1,11 @@
+run done after 10 steps
+> 100 + 21 tax + 12 shipping = 133
+subj {total: 100, country: ES, weight: 3, tax: 21, shipping: 12, grand: 133}
+pause done
+check 0 errors
+sig main : {..r, ¬country, ¬grand, ¬shipping, ¬tax, ¬total, ¬weight} → {..r, total: Num, country: ES, weight: Num, tax: Num, shipping: Num, grand: Num}
+sig quote : {..r, total: Num, ¬grand, ¬shipping, ¬tax} → {..r, tax: Num, shipping: Num, grand: Num, total: Num}
+sig tax : {..r, country: ES, total: Num, ¬tax} → {..r, tax: Num, country: ES, total: Num}
+sig tax : {..r, ¬tax} → {..r, tax: Num}
+sig shipping : {..r, weight, ¬shipping} → {..r, shipping: Num, weight: Num}   (guarded)
+sig shipping : {..r, ¬shipping} → {..r, shipping: Num}

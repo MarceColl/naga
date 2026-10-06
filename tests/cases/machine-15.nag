@@ -1,0 +1,1 @@
+main = say len("héllo 😀") say str([1, "a", {b: Nil}]) say keys({z: 1, a: 2}) say range(3) say range(1.5, 4)

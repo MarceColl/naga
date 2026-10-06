@@ -1,0 +1,6 @@
+run ready after 3 steps
+> 12
+subj {}
+pause break
+check 0 errors
+sig main : {..r} → {..r}

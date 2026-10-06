@@ -1,0 +1,4 @@
+table things :: {name: Text, n: Int, note: Text?}
+main = +{id: 1} things.get go
+go {missing} = nop
+go {thing} = +{changes: thing ∆ (thing ⫽ {n: 3})} -{thing} things.update

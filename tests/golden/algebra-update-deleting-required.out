@@ -1,0 +1,11 @@
+run done after 4 steps
+subj {id: 1, missing: true}
+pause done
+sql [-1] CREATE TABLE "things" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL, "n" INTEGER NOT NULL, "note" TEXT)
+sql [2] SELECT * FROM "things" WHERE "id" = 1
+check 1 errors
+  ✗ 2:27 go would clear name, n in things: the new side of the change set leaves them out, and things.name is required; things.n is required
+sig main : {..r, ¬id, ¬missing, ¬thing} → ✗ stops with an error (see Notes)
+sig main : {..r, ¬id, ¬missing, ¬thing} → {..r, id: Num, missing: Bool}
+sig go : {..r, missing} → {..r, missing}
+sig go : {..r, thing: {..t ⊆ things}, id: Num, ¬changes, ¬missing} → {..r, thing: {id: Num, name: Text, n: Num, note?: Text}, id: Num} | {..r, missing: Bool, id: Num}

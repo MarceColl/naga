@@ -1,0 +1,7 @@
+run error after 3 steps: todo needs done — todos.done is required (write Bool? in the table to make it optional) @2
+subj {todo: {title: "x"}}
+pause error
+sql [-1] CREATE TABLE "todos" ("id" INTEGER PRIMARY KEY, "title" TEXT NOT NULL, "done" INTEGER NOT NULL)
+check 1 errors
+  ✗ 2:29 todo needs done — todos.done is required
+sig main : {..r, ¬todo} → ✗ stops with an error (see Notes)

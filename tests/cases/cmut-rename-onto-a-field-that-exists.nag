@@ -1,0 +1,60 @@
+-- The record algebra on a small customer service. Every change to a customer
+-- is stored as a ∆, so any past version can be rebuilt by replaying them.
+-- Router: path params at the top level, the JSON body in `body`,
+-- the signed-in customer in `auth`, the request time in `time`.
+
+table customers :: {name: Text, email: Text, plan: Const, state: Const}
+table revisions :: {customer-id: Int, at: Text, change: Json}
+table events    :: {key: Text, customer-id: Int, metric: Const, qty: Num}
+
+main = (+{time: "2026-10-01", body: {name: "Ana", email: "ana@x.com", plan: Free}} post-customer show-reply)
+       (+{time: "2026-10-03", id: 1, body: {email: "ana@ana.dev"}} patch-customer show-reply)
+       (+{time: "2026-10-05", id: 1, body: {plan: Pro, state: Paused, shoe-size: 41}} patch-customer show-reply)
+       (+{id: 1, at: "2026-10-04"} get-as-of show-reply)
+       (+{auth: {customer-id: 1}, body: {key: "k1", metric: Api, qty: 120}} post-event show-reply)
+       (+{auth: {customer-id: 1}, body: {key: "k1", metric: Api, qty: 120}} post-event show-reply)
+       (+{auth: {customer-id: 1}, body: {key: "k1", metric: Api, qty: 999}} post-event show-reply)
+       (+{auth: {customer-id: 1}, body: {key: "k2", customer-id: 2, metric: Api, qty: 5}} post-event show-reply)
+
+show-reply = say "{status}  {json}" .{}
+reply      = .{status json}
+
+-- POST /customers   ⊃ lifts the body's fields up, ⊂ packs the row back up
+post-customer {body: {name, email, plan}} =
+  ⊃body +{state: Active} ⊂customer{name email plan state}
+  customers.insert +{change: {} ∆ customer} log
+  +{status: 201, json: customer} reply
+post-customer = +{status: 422, json: "name, email and plan are required"} reply
+
+-- PATCH /customers/:id   body: any of {name, email, plan, state}; anything else is ignored
+patch-customer = customers.get patched reply
+
+patched {-missing} = +{status: 404, json: "no such customer"}
+patched {customer} =
+  +{change: customer ∆ (customer ⫽ body.{name email plan state})} +{changes: change}
+  -{customer, body} customers.update updated
+
+updated {-missing} = +{status: 404, json: "no such customer"}
+updated {customer} = log +{status: 200, json: customer}
+
+-- every change is kept as the ∆ that made it
+log = +{revision: {customer-id: customer.id, at: time, change: change}}
+      revisions.insert -{revision, change}
+
+-- GET /customers/:id/as-of?at=   replay the stored ∆s onto an empty record
+get-as-of = revisions.where when customer-id == ^id and at ≤ ^at
+            +{rebuilt: {}} replay +{status: 200, json: rebuilt} reply
+
+replay {revisions: []} = -{revisions}
+replay = rebuilt=(rebuilt ⍎ head(revisions).change) revisions=tail(revisions) replay
+
+-- POST /events   idempotent on key; customer-id comes from auth when the body leaves it out
+post-event {body: {key, metric, qty}} = @body( ⊔{customer-id: ^auth.customer-id} ) owned
+post-event = +{status: 422, json: "key, metric and qty are required"} reply
+
+owned {body: {conflict}} = +{status: 403, json: "that customer isn't you"} reply
+owned = +{event: 1} body→event events.where when key == ^event.key ingest reply
+
+ingest when events == []         = events.insert +{status: 201, json: event}
+ingest when event ⊑ head(events) = +{status: 200, json: head(events)}
+ingest = +{status: 409, json: event ⊓ head(events)}

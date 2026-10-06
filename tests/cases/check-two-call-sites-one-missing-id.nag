@@ -1,0 +1,5 @@
+table todos :: {title: Text, done: Bool}
+main = (+{id: 2} finish) finish
+finish = +{changes: {done: true}} todos.update finished -{id}
+finished {-missing} = nop
+finished {-todo} = nop

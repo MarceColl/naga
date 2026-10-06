@@ -1,0 +1,12 @@
+run error after 3 steps: no clause of f matches {n: 1} @1
+  why f {n: 2} — n is 1, not 2
+  why f {m} — needs m
+subj {n: 1}
+pause error
+check 1 errors
+  ✗ 1:15 no clause of f matches {..r, n: Num, ¬m} (when main runs)
+sig main : {..r, ¬n} → {..r, n: Num}
+sig main : {..r, m, ¬n} → {..r, n: Num}
+sig main : {..r, ¬m, ¬n} → ✗ no clause of f matches {..r, n: Num, ¬m}
+sig f : {..r, n: 2} → {..r, n: Num}
+sig f : {..r, m} → {..r, m}

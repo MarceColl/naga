@@ -1,0 +1,10 @@
+run done after 6 steps
+> 8
+> [1, "a", {b: Nil}]
+> [z, a]
+> [0, 1, 2]
+> [1.5, 2.5, 3.5]
+subj {}
+pause done
+check 0 errors
+sig main : {..r} → {..r}

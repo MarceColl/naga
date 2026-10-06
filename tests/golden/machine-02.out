@@ -1,0 +1,6 @@
+parse 1:7 foo isn't defined yet — write foo = ? to leave it open
+run error after 2 steps: foo isn't defined @1
+subj {}
+pause error
+check 0 errors
+sig main : (none)

@@ -1,0 +1,7 @@
+-- paid narrows the record, so fail has no tries left to bump.
+
+main = +{id: 7} finalize paid fail
+
+finalize = +{due: now + 30, tries: 0}
+paid     = -{due, tries} +{paidAt: now}
+fail     = tries+1

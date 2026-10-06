@@ -1,0 +1,7 @@
+run done after 5 steps
+> x
+subj {name: "x", kind: Asset}
+pause done
+check 0 errors
+sig main : {..r, ¬body, ¬kind, ¬name} → {..r, name: Text, kind: Asset}
+sig post : {..r, body: {..b, kind, name}, ¬kind, ¬name} → {..r, name, kind}

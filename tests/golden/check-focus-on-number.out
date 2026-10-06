@@ -1,0 +1,6 @@
+run error after 3 steps: @n( … ) needs a record or a list, but n is a number 1 @1
+subj {n: 1}
+pause error
+check 1 errors
+  ✗ 1:15 @n( … ) needs a record or a list, but n is Num
+sig main : {..r, ¬n} → ✗ stops with an error (see Notes)

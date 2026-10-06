@@ -1,0 +1,2 @@
+main = +{tries: "many"} fail
+fail = tries+1

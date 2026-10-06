@@ -1,0 +1,10 @@
+run done after 7 steps
+> conflict
+subj {auth: {cid: 1}, body: {cid: 2, conflict: {cid: {left: 2, right: 1}}}}
+pause done
+check 0 errors
+sig main : {..r, ¬auth, ¬body} → {..r, auth: {cid: Num}, body: {cid: Num}} | {..r, auth: {cid: Num}, body: {cid: Num, conflict: {cid?: {left, right: Num}}}}
+sig go : {..r, body: [{.., ¬conflict}], auth: {..a, cid}} → ✗ after uses body as a record, so it needs a record, got [{..b, cid?, conflict?: {cid?: {left, right}}}]
+sig go : {..r, body: {..b, ¬conflict}, auth: {..a, cid}} → {..r, body: {..b, cid, ¬conflict}, auth: {..a, cid}} | {..r, body: {..b, conflict: {cid?: {left, right}}}, auth: {..a, cid}}
+sig after : {..r, body: {..b, conflict}} → {..r, body: {..b, conflict}}
+sig after : {..r, body: {..b, cid}} → {..r, body: {..b, cid}}

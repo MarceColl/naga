@@ -1,0 +1,6 @@
+run error after 4 steps: the enclosing record has no field k @1
+subj {v: 1}
+pause error
+check 1 errors
+  ✗ 1:24 main needs k, but nothing on this path provides it (main) (when main runs)
+sig main : {..r, k: Num, ¬c} → {..r, c: {v: Num}, k: Num}

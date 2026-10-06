@@ -1,0 +1,6 @@
+run error after 3 steps: a is already there — b→a won't overwrite it @1
+subj {a: 1, b: 2}
+pause error
+check 1 errors
+  ✗ 1:21 a is already there — the record is {..r, a: Num, b: Num}; use a=… to change it
+sig main : {..r, ¬a, ¬b} → ✗ stops with an error (see Notes)

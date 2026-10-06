@@ -1,0 +1,7 @@
+-- Words match on the shape of the record flowing through them.
+-- Clauses are tried top to bottom; the first match runs.
+
+main = +{n: 3} countdown
+
+countdown {n: 0} = say "liftoff"
+countdown        = say "{n}…" n-1 countdown

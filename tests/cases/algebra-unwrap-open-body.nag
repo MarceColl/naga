@@ -1,0 +1,2 @@
+main = +{body: {name: "x", kind: Asset}} post
+post {body: {name, kind}} = ⊃body say name

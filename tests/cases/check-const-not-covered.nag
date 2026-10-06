@@ -1,0 +1,2 @@
+main = +{s: Open} g
+g {s: Done} = nop

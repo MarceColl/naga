@@ -1,0 +1,8 @@
+run done after 7 steps
+> {r: {a: 3, b: 2}, d: {a: {del: 1}, b: {set: 3, was: 2}, c: {add: 4}}}
+> true
+> {a: {differ: {left: 1, right: 2}}}
+subj {r: {a: 3, b: 2}, d: {a: {del: 1}, b: {set: 3, was: 2}, c: {add: 4}}}
+pause done
+check 0 errors
+sig main : {..r, ¬d, ¬r} → {..r, r: {a: Num, b: Num}, d: Δ({a: Num, b: Num} → {b: Num, c: Num})}

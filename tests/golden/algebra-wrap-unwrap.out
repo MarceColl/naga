@@ -1,0 +1,7 @@
+run done after 6 steps
+> 4
+> 1
+subj {c: 3, a: 1, b: 2}
+pause done
+check 0 errors
+sig main : {..r, ¬a, ¬b, ¬c, ¬t} → {..r, c: Num, a: Num, b: Num}

@@ -1,0 +1,7 @@
+run done after 5 steps
+> 2
+subj {c: 1, b: "x"}
+pause done
+check 0 errors
+sig main : {..r, ¬a, ¬b, ¬c} → {..r, b: Text, c: Num}
+sig go : {..r, a: Num, ¬c} → {..r, c: Num}

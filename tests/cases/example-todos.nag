@@ -1,0 +1,24 @@
+-- A table lives in SQLite. Each run starts from a fresh in-memory
+-- database holding the seed rows. The Data tab shows every query.
+
+table todos :: {title: Text, done: Bool}
+
+seed todos = [{title: "Write the parser", done: true},
+              {title: "Add SQLite", done: false},
+              {title: "Ship the debugger", done: false}]
+
+main = add (+{id: 2} finish) (+{id: 9} finish) list-open tidy
+
+add = +{todo: {title: "Write migrations", done: false}} todos.insert
+      say "added #{todo.id}: {todo.title}" -{todo}
+
+finish = +{changes: {done: true}} todos.update finished -{id}
+
+finished {-missing} = say "no todo #{id}"
+finished {todo}     = say "finished #{id}: {todo.title}" -{todo}
+
+list-open = todos.where {done: false} when len(title) > 0
+            say "{len(todos)} open:" @todos( say "  #{id} {title}" ) -{todos}
+
+tidy = todos.where {done: true} @todos( todos.delete )
+       say "removed {len(todos)} finished todos" -{todos}

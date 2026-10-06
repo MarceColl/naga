@@ -1,0 +1,23 @@
+into ready lvl1 next=add@4 ctx= at=1 pause=step
+into ready lvl1 next=call:invoice@4 ctx= at=2 pause=step
+into ready lvl2 next=call:finalize@6 ctx= at=3 pause=step
+into ready lvl3 next=add@7 ctx= at=4 pause=step
+over ready lvl2 next=call:collect@6 ctx= at=5 pause=step
+into ready lvl3 next=call:charge@8 ctx= at=6 pause=step
+into ready lvl4 next=add@10 ctx= at=7 pause=step
+into ready lvl4 next=call:gateway@10 ctx= at=8 pause=step
+out ready lvl3 next=call:settle@8 ctx= at=10 pause=step
+over ready lvl2 next=call:report@6 ctx= at=29 pause=step
+out done lvl-1 next=- ctx= at=31 pause=done
+restart ready lvl0 next=call:main@4 ctx= at=0
+continue bp21 ready lvl5 next=inc:tries@21 ctx= at=12 pause=breakpoint
+continue bp21 done lvl-1 next=- ctx= at=31 pause=done
+into done lvl-1 next=- ctx= at=31 pause=done
+out done lvl-1 next=- ctx= at=31 pause=done
+continue bp12,25 done lvl-1 next=- ctx= at=31 pause=done
+continue bp12,25 done lvl-1 next=- ctx= at=31 pause=done
+continue done lvl-1 next=- ctx= at=31 pause=done
+seek ready lvl3 next=call:settle@8 ctx= at=10
+back ready lvl5 next=add@15 ctx= at=9
+restart ready lvl0 next=call:main@4 ctx= at=0
+again done lvl-1 next=- ctx= at=31

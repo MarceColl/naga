@@ -1,0 +1,8 @@
+run done after 3 steps
+subj {notes: []}
+pause done
+sql [-1] CREATE TABLE "notes" ("id" INTEGER PRIMARY KEY, "body" TEXT NOT NULL, "tag" TEXT)
+sql [1] SELECT * FROM "notes" ORDER BY "id"
+check 1 errors
+  ✗ 2:25 tag might be missing — the record here is {id: Num, body: Text, tag?: Text}; match on {tag} first
+sig main : {..r, ¬notes} → ✗ stops with an error (see Notes)

@@ -1,0 +1,2 @@
+main = +{paidAt: 1, due: 1, tries: 1} paid
+paid = -{due, tries} +{paidAt: now}

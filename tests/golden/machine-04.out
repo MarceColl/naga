@@ -1,0 +1,6 @@
+run error after 4 steps: both sides of ‖ change a (side 1 and side 2) @1
+subj {}
+pause error
+check 1 errors
+  ✗ 1:8 both sides of ‖ write a — side 1 and side 2
+sig main : {..r} → ✗ stops with an error (see Notes)

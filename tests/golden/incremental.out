@@ -1,0 +1,7 @@
+first run: recomputed [finalize, gateway, charge, paid, fail, wait, void, collect, settle, report, invoice, main] reused 0 · errors 0
+same text: recomputed [] reused 12 · errors 0
+edit report message: recomputed [report] reused 11 · errors 0
+edit fail body, same signature: recomputed [fail] reused 11 · errors 0
+add a blank line at the top: recomputed [] reused 12 · errors 0
+change finalize signature: recomputed [finalize, invoice, main] reused 9 · errors 0
+back to the start: recomputed [] reused 12 · errors 0

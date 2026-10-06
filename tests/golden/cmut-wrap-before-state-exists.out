@@ -1,0 +1,35 @@
+run error after 6 steps: needs field tier @24
+subj {time: "2026-10-01", name: "Ana", email: "ana@x.com", plan: Free, state: Active}
+pause error
+sql [-1] CREATE TABLE "customers" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL, "email" TEXT NOT NULL, "plan" TEXT NOT NULL, "state" TEXT NOT NULL)
+sql [-1] CREATE TABLE "revisions" ("id" INTEGER PRIMARY KEY, "customer-id" INTEGER NOT NULL, "at" TEXT NOT NULL, "change" TEXT NOT NULL)
+sql [-1] CREATE TABLE "events" ("id" INTEGER PRIMARY KEY, "key" TEXT NOT NULL, "customer-id" INTEGER NOT NULL, "metric" TEXT NOT NULL, "qty" REAL NOT NULL)
+check 1 errors
+  ✗ 25:2 customers has no column tier
+sig main : {..r, ¬body, ¬time} → ✗ stops with an error (see Notes)
+sig show-reply : {..r, json, status} → {}
+sig reply : {..r, json, status} → {status, json}
+sig post-customer : {..r, body: {..b, email, name, plan}, tier, ¬customer, ¬email, ¬name, ¬plan, ¬state} → ✗ stops with an error (see Notes)
+sig post-customer : {..r, ¬json, ¬status} → {status: Num, json: Text}
+sig patch-customer : {..r, body, id: Num, time: Text, ¬change, ¬changes, ¬customer, ¬json, ¬missing, ¬revision, ¬status} → {status: Num, json: {id: Num, name: Text, email: Text, plan: Const, state: Const}}
+sig patch-customer : {..r, body, id: Num, ¬change, ¬changes, ¬customer, ¬json, ¬missing, ¬status} → {status: Num, json: Text}
+sig patch-customer : {..r, id: Num, ¬customer, ¬json, ¬missing, ¬status} → {status: Num, json: Text}
+sig patched : {..r, missing, ¬json, ¬status} → {..r, status: Num, json: Text}
+sig patched : {..r, customer, body, id: Num, time: Text, ¬change, ¬changes, ¬json, ¬missing, ¬revision, ¬status} → {..r, customer: {id: Num, name: Text, email: Text, plan: Const, state: Const}, status: Num, json: {id: Num, name: Text, email: Text, plan: Const, state: Const}, id: Num, time: Text}
+sig patched : {..r, customer, body, id: Num, ¬change, ¬changes, ¬json, ¬missing, ¬status} → {..r, change: Δ({..c} → {..c, name?, email?, plan?, state?}), status: Num, json: Text, id: Num}
+sig updated : {..r, missing, ¬json, ¬status} → {..r, status: Num, json: Text}
+sig updated : {..r, customer: {..c, id: Num}, change, time: Text, ¬json, ¬revision, ¬status} → {..r, status: Num, json: {..c, id: Num}, customer: {..c, id: Num}, time: Text}
+sig log : {..r, change, customer: {..c, id: Num}, time: Text, ¬revision} → {..r, customer: {..c, id: Num}, time: Text}
+sig get-as-of : {..r, at, id, ¬json, ¬rebuilt, ¬revisions, ¬status} → {status: Num, json: {}} | {status: Num, json: {..}}
+sig replay : {..r, revisions: []} → {..r}
+sig replay : {..r, rebuilt, revisions: [{.., change}]} → {..r, rebuilt: {..}}
+sig post-event : {..r, body: {..b ⊆ events, key, metric, qty, ¬conflict}, auth: {..a, customer-id}, ¬event, ¬events, ¬json, ¬status} → {status: Num, json: {id: Num, key: Text, customer-id: Num, metric: Const, qty: Num}}
+sig post-event : {..r, body: {..b, key, metric, qty, ¬conflict}, auth: {..a, customer-id}, ¬event, ¬events, ¬json, ¬status} → {status: Num, json: {id: Num, key: Text, customer-id: Num, metric: Const, qty: Num}} | {status: Num, json: {}}
+sig post-event : {..r, body: {..b, key, metric, qty, ¬conflict}, auth: {..a, customer-id}, ¬json, ¬status} → {status: Num, json: Text}
+sig post-event : {..r, ¬json, ¬status} → {status: Num, json: Text}
+sig owned : {..r, body: {..b, conflict}, ¬json, ¬status} → {status: Num, json: Text}
+sig owned : {..r, body: {..b ⊆ events, key}, ¬event, ¬events, ¬json, ¬status} → {status: Num, json: {id: Num, key: Text, customer-id: Num, metric: Const, qty: Num}}
+sig owned : {..r, body: {..b, key}, ¬event, ¬events, ¬json, ¬status} → {status: Num, json: {id: Num, key: Text, customer-id: Num, metric: Const, qty: Num}} | {status: Num, json: {}}
+sig ingest : {..r, events, event: {..e ⊆ events}, ¬json, ¬status} → {..r, event: {id: Num, key: Text, customer-id: Num, metric: Const, qty: Num}, status: Num, json: {id: Num, key: Text, customer-id: Num, metric: Const, qty: Num}, events}   (guarded)
+sig ingest : {..r, event, events: {..e}, ¬json, ¬status} → {..r, status: Num, json, event, events: [Any]}   (guarded)
+sig ingest : {..r, event, events: {..e}, ¬json, ¬status} → {..r, status: Num, json: {}, event: {..e}, events: [{..e}]}

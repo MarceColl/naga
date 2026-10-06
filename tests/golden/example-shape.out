@@ -1,0 +1,9 @@
+run error after 9 steps: needs field tries @7
+subj {id: 7, paidAt: 6}
+pause error
+check 1 errors
+  ✗ 3:30 fail needs tries — the record here is {..r, id: Num, paidAt: Num, ¬due, ¬tries}
+sig main : {..r, ¬due, ¬id, ¬paidAt, ¬tries} → ✗ stops with an error (see Notes)
+sig finalize : {..r, ¬due, ¬tries} → {..r, due: Num, tries: Num}
+sig paid : {..r, due, tries, ¬paidAt} → {..r, paidAt: Num}
+sig fail : {..r, tries: Num} → {..r, tries: Num}

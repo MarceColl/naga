@@ -1,0 +1,5 @@
+run done after 6 steps
+subj {xs: [2, 4], t: 6}
+pause done
+check 0 errors
+sig main : {..r, ¬t, ¬xs} → {..r, xs: [Num], t: Num}

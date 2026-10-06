@@ -1,0 +1,2 @@
+main = +{card: {kind: Visa}} charge
+charge = @card( balance-1 )

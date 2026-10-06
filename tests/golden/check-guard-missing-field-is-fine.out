@@ -1,0 +1,7 @@
+run done after 3 steps
+subj {a: 1}
+pause done
+check 0 errors
+sig main : {..r, ¬a} → {..r, a: Num}
+sig f : {..r, b} → {..r, b: Num}   (guarded)
+sig f : {..r} → {..r}

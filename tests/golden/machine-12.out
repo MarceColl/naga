@@ -1,0 +1,7 @@
+run done after 3 steps
+> 0.3
+> 0.333333333333
+subj {}
+pause done
+check 0 errors
+sig main : {..r} → {..r}

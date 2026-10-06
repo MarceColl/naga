@@ -1,0 +1,8 @@
+run done after 5 steps
+> {a: 1}
+> 2
+> [{a: 1}]
+subj {x: {a: 1}}
+pause done
+check 0 errors
+sig main : {..r, ¬x} → {..r, x: {a: Num}}

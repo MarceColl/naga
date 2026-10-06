@@ -1,0 +1,2 @@
+main = +{total: 1} (+{tax: 1} ‖ (+{x: 1} tax-again))
+tax-again = +{tax: 2}

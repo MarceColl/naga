@@ -1,0 +1,7 @@
+run error after 4 steps: tries is a string "many", not a number @2
+subj {tries: "many"}
+pause error
+check 1 errors
+  ✗ 1:24 fail needs tries: Num, but it's Text
+sig main : {..r, ¬tries} → ✗ stops with an error (see Notes)
+sig fail : {..r, tries: Num} → {..r, tries: Num}

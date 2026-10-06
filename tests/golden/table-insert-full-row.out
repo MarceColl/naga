@@ -1,0 +1,9 @@
+run done after 4 steps
+> {todo: {id: 2, title: "q's", done: true, tags: {n: 1.5, deep: [Open, nil]}, status: Done}}
+subj {todo: {id: 2, title: "q's", done: true, tags: {n: 1.5, deep: [Open, nil]}, status: Done}}
+pause done
+sql [-1] CREATE TABLE "todos" ("id" INTEGER PRIMARY KEY, "title" TEXT NOT NULL, "done" INTEGER NOT NULL, "tags" TEXT, "status" TEXT NOT NULL)
+sql [-1] INSERT INTO "todos" ("title", "done", "tags", "status") VALUES ('a', 0, '[1,"x"]', 'Open')
+sql [2] INSERT INTO "todos" ("title", "done", "tags", "status") VALUES ('q''s', 1, '{"n":1.5,"deep":[{"$sym":"Open"},null]}', 'Done')
+check 0 errors
+sig main : {..r, ¬todo} → {..r, todo: {id: Num, title: Text, done: Bool, tags?, status: Const}}

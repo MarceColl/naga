@@ -1,0 +1,6 @@
+run done after 1 steps
+subj {}
+pause done
+check 0 errors
+sig main : {..r} → {..r}
+sig broken : {..r, b, ¬a} → {..r, a: Num}

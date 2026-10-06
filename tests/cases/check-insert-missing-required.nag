@@ -1,0 +1,2 @@
+table todos :: {title: Text, done: Bool}
+main = +{todo: {title: "x"}} todos.insert

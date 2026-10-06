@@ -1,0 +1,7 @@
+run done after 6 steps
+> 5
+> s!
+subj {x: {a: 1, b: 2}, y: {b: "s", c: 4}, m: {a: 1, b: "s", c: 4}, n: {b: {differ: {left: 2, right: "s"}}}, d: {a: {del: 1}, b: {set: "s", was: 2}, c: {add: 4}}, z: {b: "s", c: 4}}
+pause done
+check 0 errors
+sig main : {..r, ¬d, ¬m, ¬n, ¬x, ¬y, ¬z} → {..r, x: {a: Num, b: Num}, y: {b: Text, c: Num}, m: {a: Num, b: Text, c: Num}, n: {b: {agree?, differ?: {left: Num, right: Text}}}, d: Δ({a: Num, b: Num} → {b: Text, c: Num}), z: {b: Text, c: Num, ¬a}}

@@ -1,0 +1,12 @@
+run done after 6 steps
+> {id: 1, missing: true}
+subj {id: 1, missing: true}
+pause done
+sql [-1] CREATE TABLE "todos" ("id" INTEGER PRIMARY KEY, "title" TEXT NOT NULL, "done" INTEGER NOT NULL, "tags" TEXT, "status" TEXT NOT NULL)
+sql [-1] INSERT INTO "todos" ("title", "done", "tags", "status") VALUES ('a', 0, '[1,"x"]', 'Open')
+sql [2] DELETE FROM "todos" WHERE "id" = 1
+sql [4] DELETE FROM "todos" WHERE "id" = 1
+check 1 errors
+  ✗ 3:29 needs deleted — the record here is {..r, id: Num, missing: Bool, ¬deleted}
+sig main : {..r, ¬deleted, ¬id, ¬missing} → {..r, id: Num, deleted: Bool} | {..r, id: Num, missing: Bool}
+sig main : {..r, ¬deleted, ¬id, ¬missing} → ✗ stops with an error (see Notes)

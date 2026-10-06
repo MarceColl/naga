@@ -1,0 +1,12 @@
+-- @field( … ) runs words inside a nested record,
+-- or on every item when the field holds a list.
+
+main = +{lines: [{sku: Tea, qty: 2, price: 4.5}, {sku: Pot, qty: 1, price: 30}]}
+       price-order show
+
+price-order = @lines( line-total ) +{subtotal: sum(lines.total)} discount
+
+line-total = +{total: qty * price}
+
+discount when subtotal > 35 = +{discount: subtotal * 0.1}
+discount                    = +{discount: 0}

@@ -1,0 +1,1 @@
+main = +{xs: [1, 2]} @xs( it=it * 2 ) +{t: sum(xs)}

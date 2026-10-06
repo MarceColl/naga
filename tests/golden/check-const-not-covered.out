@@ -1,0 +1,8 @@
+run error after 3 steps: no clause of g matches {s: Open} @1
+  why g {s: Done} — s is Open, not Done
+subj {s: Open}
+pause error
+check 1 errors
+  ✗ 1:18 no clause of g matches {..r, s: Open}
+sig main : {..r, ¬s} → ✗ stops with an error (see Notes)
+sig g : {..r, s: Done} → {..r, s: Done}

@@ -1,0 +1,3 @@
+main = +{a: 1} f
+f when b > 1 = nop
+f = nop

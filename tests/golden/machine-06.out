@@ -1,0 +1,6 @@
+parse 2:11 this string is missing its closing "
+run done after 1 steps
+subj {}
+pause done
+check 0 errors
+sig f : {..r} → {..r}

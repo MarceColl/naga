@@ -1,0 +1,3 @@
+g = nop
+g {a} = nop
+main = g

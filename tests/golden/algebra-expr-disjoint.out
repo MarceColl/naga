@@ -1,0 +1,6 @@
+run done after 4 steps
+> 2
+subj {x: {a: 1}, y: {b: 2}, u: {a: 1, b: 2}}
+pause done
+check 0 errors
+sig main : {..r, ¬u, ¬x, ¬y} → {..r, x: {a: Num}, y: {b: Num}, u: {a: Num, b: Num}}

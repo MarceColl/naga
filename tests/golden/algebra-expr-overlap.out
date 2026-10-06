@@ -1,0 +1,7 @@
+run error after 3 steps: ⊔: the records disagree on a — the ⊔{…} step adds conflict instead of failing @1
+  why a: 1 vs 2
+subj {x: {a: 1}, y: {a: 2}}
+pause error
+check 1 errors
+  ✗ 1:31 a ⊔ b: both records have a, so ⊔ fails if they disagree — use the ⊔{…} step, which adds conflict for a clause to handle
+sig main : {..r, ¬x, ¬y} → ✗ stops with an error (see Notes)

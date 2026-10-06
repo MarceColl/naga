@@ -1,0 +1,9 @@
+run done after 3 steps
+> {todos: [{id: 1, title: "a", done: false, tags: [1, "x"], status: Open}]}
+subj {todos: [{id: 1, title: "a", done: false, tags: [1, "x"], status: Open}]}
+pause done
+sql [-1] CREATE TABLE "todos" ("id" INTEGER PRIMARY KEY, "title" TEXT NOT NULL, "done" INTEGER NOT NULL, "tags" TEXT, "status" TEXT NOT NULL)
+sql [-1] INSERT INTO "todos" ("title", "done", "tags", "status") VALUES ('a', 0, '[1,"x"]', 'Open')
+sql [1] SELECT * FROM "todos" WHERE ((CAST(length("title") AS REAL) / 2) > 0.4) ORDER BY "id"
+check 0 errors
+sig main : {..r, ¬todos} → {..r, todos: [{id: Num, title: Text, done: Bool, tags?, status: Const}]}

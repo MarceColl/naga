@@ -1,0 +1,3 @@
+main = +{n: 1} f
+f {n: 2} = nop
+f {m} = nop

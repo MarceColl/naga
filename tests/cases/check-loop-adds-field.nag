@@ -1,0 +1,2 @@
+main = loop
+loop = +{step: 1} loop

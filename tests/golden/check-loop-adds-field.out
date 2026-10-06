@@ -1,0 +1,7 @@
+run error after 5 steps: step is already there — use step=… to change it @2
+subj {step: 1}
+pause error
+check 1 errors
+  ✗ 2:18 loop adds step, but it is already there — the record here is {..r, step: Num}
+sig main : {..r} → ✗ stops with an error (see Notes)
+sig loop : {..r, ¬step} → ✗ stops with an error (see Notes)

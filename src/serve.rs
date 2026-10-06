@@ -42,7 +42,7 @@ pub fn start(src: String, db: std::path::PathBuf) -> Result<Router, String> {
                 Ok(s) => s,
                 Err(e) => return drop(ready_tx.send(Err(e))),
             };
-            let routes: Vec<(String, String)> = p.routes.iter().map(|r| (r.verb.to_string(), r.pattern())).collect();
+            let routes: Vec<(String, String, String)> = p.routes.iter().map(|r| (r.verb.to_string(), r.pattern(), r.decl())).collect();
             let _ = ready_tx.send(Ok(routes));
             for job in rx {
                 let a = answer(&p, &mut store, &job);
@@ -51,7 +51,9 @@ pub fn start(src: String, db: std::path::PathBuf) -> Result<Router, String> {
         })
         .map_err(|e| e.to_string())?;
     let routes = ready_rx.recv().map_err(|_| "the interpreter stopped while starting".to_string())??;
-    Ok(routes.into_iter().enumerate().fold(Router::new(), |app, (route, (verb, pattern))| {
+    let listing = format!("[{}]", routes.iter().map(|(_, _, decl)| json_str(decl)).collect::<Vec<_>>().join(","));
+    let has_root = routes.iter().any(|(verb, pattern, _)| verb == "GET" && pattern == "/");
+    let app = routes.into_iter().enumerate().fold(Router::new(), |app, (route, (verb, pattern, _))| {
         let tx = tx.clone();
         let handler = move |Path(path): Path<Pairs>, Query(query): Query<Pairs>, body: String| async move {
             let (reply, answer) = oneshot::channel();
@@ -60,10 +62,20 @@ pub fn start(src: String, db: std::path::PathBuf) -> Result<Router, String> {
                 true => answer.await.unwrap_or_else(|_| (500, error("the interpreter stopped"))),
                 false => (500, error("the interpreter stopped")),
             };
-            (StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), [(header::CONTENT_TYPE, "application/json")], json)
+            respond(status, json)
         };
         app.route(&pattern, on(filter(&verb), handler))
+    });
+    // the server describes itself: GET / lists the routes, unless the program answers it
+    let index = format!("{{\"routes\":{listing}}}");
+    let app = if has_root { app } else { app.route("/", axum::routing::get(move || async move { respond(200, index) })) };
+    Ok(app.fallback(move |method: axum::http::Method, uri: axum::http::Uri| async move {
+        respond(404, format!("{{\"error\":{},\"routes\":{listing}}}", json_str(&format!("no route {method} {}", uri.path()))))
     }))
+}
+
+fn respond(status: u16, json: String) -> impl axum::response::IntoResponse {
+    (StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), [(header::CONTENT_TYPE, "application/json")], json)
 }
 
 fn filter(verb: &str) -> MethodFilter {

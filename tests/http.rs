@@ -41,7 +41,8 @@ async fn the_ledger_answers_over_http() {
         ("GET", "/transactions?account=6", "", 200, r#"[{"tx-id":3,"account-id":6,"amount":120000,"date":"2026-09-27","payee":"Landlord"}]"#),
         ("GET", "/reports/income?from=2026-09-01", "", 400, r#"{"error":"to is required"}"#),
         ("GET", "/reports/income?from=2026-09-01&to=2026-11-01", "", 200, r#"{"income":310000,"expenses":120000,"net":190000,"#),
-        ("GET", "/nope", "", 404, ""),
+        ("GET", "/", "", 200, r#"{"routes":["GET /accounts","GET /accounts/:id:Int","POST /accounts {name: Text, kind: Const}","#),
+        ("GET", "/nope", "", 404, r#"{"error":"no route GET /nope","routes":["GET /accounts","#),
         ("PUT", "/accounts/1", "", 405, ""),
     ];
     for (method, uri, body, status, prefix) in cases {
@@ -76,6 +77,7 @@ fn routes_parse() {
     let names = |cs: Vec<&naga::ast::Col>| cs.iter().map(|c| format!("{}:{}{}", c.name, c.ty.name(), if c.opt { "?" } else { "" })).collect::<Vec<_>>().join(" ");
     assert_eq!(names(r.params().collect()), "id:Int q:Text n:Num?");
     assert_eq!(names(r.body.iter().flatten().collect()), "x:Const y:Json?");
+    assert_eq!(r.decl(), "GET /a/:id:Int/b?q:Text&n:Num? {x: Const, y: Json?}");
     assert!(parse("route = nop\n").routes.is_empty(), "a word may still be called route");
 }
 

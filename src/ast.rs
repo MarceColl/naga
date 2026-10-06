@@ -280,6 +280,13 @@ impl Route {
         });
         format!("/{}", segs.collect::<Vec<_>>().join("/"))
     }
+    /// The declaration without its word: `POST /accounts/:id:Int?q:Text? {name: Text}`.
+    pub fn decl(&self) -> String {
+        let col = |c: &Col| format!("{}:{}{}", c.name, c.ty.name(), if c.opt { "?" } else { "" });
+        let query = self.query.iter().map(col).collect::<Vec<_>>().join("&");
+        let body = self.body.as_ref().map(|cs| format!(" {{{}}}", cs.iter().map(|c| col(c).replacen(':', ": ", 1)).collect::<Vec<_>>().join(", ")));
+        format!("{} {}{}{query}{}", self.verb, self.path, if query.is_empty() { "" } else { "?" }, body.unwrap_or_default())
+    }
     pub fn path_params(&self) -> impl Iterator<Item = &Col> {
         self.segs.iter().filter_map(|s| match s {
             Seg::Param(c) => Some(c),

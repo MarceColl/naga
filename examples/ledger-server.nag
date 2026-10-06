@@ -33,7 +33,8 @@ route PATCH  /accounts/:id:Int {name: Text?, archived: Bool?} = patch-account
 route DELETE /accounts/:id:Int                                = delete-account
 route GET    /transactions?account:Int?                       = get-transactions
 route GET    /transactions/:id:Int                            = get-transaction
-route POST   /transactions {date: Text, payee: Text, postings: Json} = post-transaction
+route POST   /transactions {date: Text, payee: Text, postings: [{account-id: Int, amount: Num}]}
+                                                              = post-transaction
 route DELETE /transactions/:id:Int                            = delete-transaction
 route GET    /reports/balance-sheet                           = get-balance-sheet
 route GET    /reports/income?from:Text&to:Text                = get-income

@@ -245,10 +245,42 @@ pub struct Seed {
 
 pub const VERBS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
+/// A route field's type: a column type, a list of one, or a nested record.
+#[derive(Clone, Debug)]
+pub enum FieldTy {
+    Col(ColType),
+    List(Box<FieldTy>),
+    Rec(Vec<FieldDecl>),
+}
+
+#[derive(Clone, Debug)]
+pub struct FieldDecl {
+    pub name: Name,
+    pub ty: FieldTy,
+    pub opt: bool,
+}
+
+impl std::fmt::Display for FieldTy {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            FieldTy::Col(c) => write!(f, "{}", c.name()),
+            FieldTy::List(t) => write!(f, "[{t}]"),
+            FieldTy::Rec(fs) => write!(f, "{{{}}}", fs.iter().map(|x| x.show(": ")).collect::<Vec<_>>().join(", ")),
+        }
+    }
+}
+
+impl FieldDecl {
+    /// `name: Type?` in a body, `name:Type?` in a path or query.
+    pub fn show(&self, sep: &str) -> String {
+        format!("{}{sep}{}{}", self.name, self.ty, if self.opt { "?" } else { "" })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Seg {
     Lit(String),
-    Param(Col),
+    Param(FieldDecl),
 }
 
 /// `route VERB /path/:id:Int?q:Text {body: Type} = word`: params land at the top level, the body in `body`.
@@ -258,8 +290,8 @@ pub struct Route {
     /// As written, before the query: `/accounts/:id:Int`.
     pub path: String,
     pub segs: Vec<Seg>,
-    pub query: Vec<Col>,
-    pub body: Option<Vec<Col>>,
+    pub query: Vec<FieldDecl>,
+    pub body: Option<Vec<FieldDecl>>,
     pub word: Name,
     pub line: usize,
 }
@@ -273,7 +305,7 @@ impl Route {
     pub fn shape(&self) -> String {
         self.join(|_| "{}".into())
     }
-    fn join(&self, param: impl Fn(&Col) -> String) -> String {
+    fn join(&self, param: impl Fn(&FieldDecl) -> String) -> String {
         let segs = self.segs.iter().map(|s| match s {
             Seg::Lit(l) => l.clone(),
             Seg::Param(c) => param(c),
@@ -282,19 +314,18 @@ impl Route {
     }
     /// The declaration without its word: `POST /accounts/:id:Int?q:Text? {name: Text}`.
     pub fn decl(&self) -> String {
-        let col = |c: &Col| format!("{}:{}{}", c.name, c.ty.name(), if c.opt { "?" } else { "" });
-        let query = self.query.iter().map(col).collect::<Vec<_>>().join("&");
-        let body = self.body.as_ref().map(|cs| format!(" {{{}}}", cs.iter().map(|c| col(c).replacen(':', ": ", 1)).collect::<Vec<_>>().join(", ")));
+        let query = self.query.iter().map(|q| q.show(":")).collect::<Vec<_>>().join("&");
+        let body = self.body.clone().map(|fs| format!(" {}", FieldTy::Rec(fs)));
         format!("{} {}{}{query}{}", self.verb, self.path, if query.is_empty() { "" } else { "?" }, body.unwrap_or_default())
     }
-    pub fn path_params(&self) -> impl Iterator<Item = &Col> {
+    pub fn path_params(&self) -> impl Iterator<Item = &FieldDecl> {
         self.segs.iter().filter_map(|s| match s {
             Seg::Param(c) => Some(c),
             Seg::Lit(_) => None,
         })
     }
     /// Every field the route puts at the top level of the record, besides `body` and `time`.
-    pub fn params(&self) -> impl Iterator<Item = &Col> {
+    pub fn params(&self) -> impl Iterator<Item = &FieldDecl> {
         self.path_params().chain(&self.query)
     }
 }

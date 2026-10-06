@@ -132,49 +132,51 @@ fn answer(p: &Program, store: &mut Store, job: &Job) -> (u16, String) {
 
 /// Path params and query fields at the top level, the body in `body`, the time in `time`.
 fn request(r: &Route, job: &Job) -> Result<Rec, String> {
-    let mut rec = Rec::new();
-    let raw = |pairs: &Pairs, c: &Col| pairs.iter().find(|(k, _)| **k == *c.name).map(|(_, v)| text(c, v));
-    for (c, pairs) in r.path_params().map(|c| (c, &job.path)).chain(r.query.iter().map(|c| (c, &job.query))) {
-        field(&mut rec, c, raw(pairs, c))?;
-    }
-    if let Some(cols) = &r.body {
+    let raw = |pairs: &Pairs, d: &FieldDecl| pairs.iter().find(|(k, _)| **k == *d.name).map(|(_, v)| (d.name.clone(), text(d, v)));
+    let given: Rec = r.path_params().filter_map(|d| raw(&job.path, d)).chain(r.query.iter().filter_map(|d| raw(&job.query, d))).collect();
+    let mut rec = record(r.params(), &given, "")?;
+    if let Some(decls) = &r.body {
         let Some(Value::Rec(given)) = from_json(&job.body) else { return Err("the body must be a JSON object".into()) };
-        let mut body = Rec::new();
-        for c in cols {
-            field(&mut body, c, given.get(&c.name).filter(|v| !matches!(v, Value::Nil)).cloned())?;
-        }
-        rec.insert("body".into(), Value::Rec(Rc::new(body)));
+        rec.insert("body".into(), Value::Rec(Rc::new(record(decls, &given, "")?)));
     }
     rec.insert("time".into(), Value::Text(now_utc().into()));
     Ok(rec)
 }
 
-fn field(rec: &mut Rec, c: &Col, v: Option<Value>) -> Result<(), String> {
-    match v.map(|v| decode(c.ty, v)) {
-        None if c.opt => Ok(()),
-        None => Err(format!("{} is required", c.name)),
-        Some(None) => Err(format!("{} must be {}", c.name, c.ty.name())),
-        Some(Some(v)) => {
-            rec.insert(c.name.clone(), v);
-            Ok(())
+/// The declared fields of `given`, decoded; `at` prefixes the names in errors.
+fn record<'a>(decls: impl IntoIterator<Item = &'a FieldDecl>, given: &Rec, at: &str) -> Result<Rec, String> {
+    let mut out = Rec::new();
+    for d in decls {
+        let at = format!("{at}{}", d.name);
+        match given.get(&d.name).filter(|v| !matches!(v, Value::Nil)) {
+            None if d.opt => {}
+            None => return Err(format!("{at} is required")),
+            Some(v) => drop(out.insert(d.name.clone(), decode(&d.ty, v, &at)?)),
         }
     }
+    Ok(out)
 }
 
-/// Path and query values arrive as text; unless the column wants text, they're read as JSON.
-fn text(c: &Col, s: &str) -> Value {
-    match c.ty {
-        ColType::Text | ColType::Const => Value::Text(s.into()),
-        _ => from_json(s).unwrap_or_else(|| Value::Text(s.into())),
+fn decode(ty: &FieldTy, v: &Value, at: &str) -> Result<Value, String> {
+    use {ColType::*, FieldTy::Col};
+    match (ty, v) {
+        (Col(Int), Value::Num(n)) if n.fract() != 0.0 => Err(format!("{at} must be {ty}")),
+        (Col(Const), Value::Text(s)) => Ok(Value::Const(s.clone())),
+        (Col(Int | Num), Value::Num(_)) | (Col(Text), Value::Text(_)) | (Col(Bool), Value::Bool(_)) | (Col(Json), _) => Ok(v.clone()),
+        (FieldTy::List(t), Value::List(xs)) => {
+            let xs = xs.iter().enumerate().map(|(i, x)| decode(t, x, &format!("{at}[{i}]")));
+            Ok(Value::List(Rc::new(xs.collect::<Result<_, _>>()?)))
+        }
+        (FieldTy::Rec(ds), Value::Rec(r)) => Ok(Value::Rec(Rc::new(record(ds, r, &format!("{at}."))?))),
+        _ => Err(format!("{at} must be {ty}")),
     }
 }
 
-fn decode(ty: ColType, v: Value) -> Option<Value> {
-    match (ty, v) {
-        (ColType::Int, Value::Num(n)) if n.fract() == 0.0 => Some(Value::Num(n)),
-        (ColType::Num, v @ Value::Num(_)) | (ColType::Text, v @ Value::Text(_)) | (ColType::Bool, v @ Value::Bool(_)) | (ColType::Json, v) => Some(v),
-        (ColType::Const, Value::Text(s)) => Some(Value::Const(s)),
-        _ => None,
+/// Path and query values arrive as text; unless the field wants text, they're read as JSON.
+fn text(d: &FieldDecl, s: &str) -> Value {
+    match d.ty {
+        FieldTy::Col(ColType::Text | ColType::Const) => Value::Text(s.into()),
+        _ => from_json(s).unwrap_or_else(|| Value::Text(s.into())),
     }
 }
 

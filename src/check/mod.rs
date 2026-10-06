@@ -9,7 +9,7 @@ mod stmt;
 mod ty;
 mod world;
 
-use crate::ast::{Col, Pos, Program, StmtKind, walk};
+use crate::ast::{FieldDecl, FieldTy, Pos, Program, StmtKind, walk};
 use crate::value::Name;
 use indexmap::IndexMap;
 pub use sig::Sig;
@@ -178,6 +178,19 @@ struct CallSite<'a> {
     reply: bool,
 }
 
+fn field(d: &FieldDecl) -> (Name, ty::Field) {
+    (d.name.clone(), ty::Field { ty: decl_ty(&d.ty), opt: d.opt })
+}
+
+/// What a route's router guarantees: nested records are closed.
+fn decl_ty(t: &FieldTy) -> ty::Ty {
+    match t {
+        FieldTy::Col(c) => ty::col_type(*c),
+        FieldTy::List(t) => ty::list(decl_ty(t)),
+        FieldTy::Rec(ds) => ty::rec(Shape::closed(ds.iter().map(field).collect())),
+    }
+}
+
 fn call_sites<'a>(p: &'a Program, entry: Option<&'a Name>) -> Vec<CallSite<'a>> {
     let entry = entry.filter(|e| p.words.contains_key(*e)).map(|e| CallSite {
         word: e,
@@ -188,10 +201,9 @@ fn call_sites<'a>(p: &'a Program, entry: Option<&'a Name>) -> Vec<CallSite<'a>> 
         reply: false,
     });
     let routes = p.routes.iter().filter(|r| p.words.contains_key(&r.word)).map(|r| {
-        let field = |c: &Col| (c.name.clone(), ty::Field { ty: ty::col_type(c.ty), opt: c.opt });
         let mut fields: IndexMap<Name, ty::Field> = r.params().map(field).collect();
-        if let Some(cols) = &r.body {
-            fields.insert("body".into(), ty::Field { ty: ty::rec(Shape::closed(cols.iter().map(field).collect())), opt: false });
+        if let Some(decls) = &r.body {
+            fields.insert("body".into(), ty::Field { ty: decl_ty(&FieldTy::Rec(decls.clone())), opt: false });
         }
         fields.insert("time".into(), ty::Field { ty: ty::Ty::Text, opt: false });
         let label = format!("route {} {}", r.verb, r.path);

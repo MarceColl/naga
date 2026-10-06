@@ -34,13 +34,17 @@ async fn the_ledger_answers_over_http() {
         ("POST", "/accounts", r#"{"name":"Pets"}"#, 400, r#"{"error":"kind is required"}"#),
         ("POST", "/accounts", r#"{"name":7,"kind":"Asset"}"#, 400, r#"{"error":"name must be Text"}"#),
         ("POST", "/accounts", "[1]", 400, r#"{"error":"the body must be a JSON object"}"#),
+        ("POST", "/transactions", r#"{"date":"d","payee":"p","postings":{}}"#, 400, r#"{"error":"postings must be [{account-id: Int, amount: Num}]"}"#),
+        ("POST", "/transactions", r#"{"date":"d","payee":"p","postings":[{"account-id":1,"amount":5},{"account-id":2.5,"amount":-5}]}"#, 400, r#"{"error":"postings[1].account-id must be Int"}"#),
+        ("POST", "/transactions", r#"{"date":"d","payee":"p","postings":[{"amount":5}]}"#, 400, r#"{"error":"postings[0].account-id is required"}"#),
+        ("POST", "/transactions", r#"{"date":"2026-10-02","payee":"Bakery","postings":[{"account-id":5,"amount":300,"note":"x"},{"account-id":1,"amount":-300}]}"#, 201, r#"{"id":4,"date":"2026-10-02","payee":"Bakery"}"#),
         ("POST", "/accounts", r#"{"name":"Cafés","kind":"Expense","extra":1}"#, 201, r#"{"id":8,"name":"Cafés","kind":"Expense","archived":false}"#),
         ("PATCH", "/accounts/2", r#"{"archived":true}"#, 200, r#"{"id":2,"name":"Savings","kind":"Asset","archived":true}"#),
         ("DELETE", "/accounts/8", "", 204, ""),
         ("DELETE", "/accounts/1", "", 409, r#""account has postings"#),
         ("GET", "/transactions?account=6", "", 200, r#"[{"tx-id":3,"account-id":6,"amount":120000,"date":"2026-09-27","payee":"Landlord"}]"#),
         ("GET", "/reports/income?from=2026-09-01", "", 400, r#"{"error":"to is required"}"#),
-        ("GET", "/reports/income?from=2026-09-01&to=2026-11-01", "", 200, r#"{"income":310000,"expenses":120000,"net":190000,"#),
+        ("GET", "/reports/income?from=2026-09-01&to=2026-11-01", "", 200, r#"{"income":310000,"expenses":120300,"net":189700,"#),
         ("GET", "/", "", 200, r#"{"routes":["GET /accounts","GET /accounts/:id:Int","POST /accounts {name: Text, kind: Const}","#),
         ("GET", "/nope", "", 404, r#"{"error":"no route GET /nope","routes":["GET /accounts","#),
         ("PUT", "/accounts/1", "", 405, ""),
@@ -74,11 +78,14 @@ fn routes_parse() {
     assert!(p.errors.is_empty(), "{:?}", p.errors);
     let r = &p.routes[0];
     assert_eq!((&*r.verb, r.path.as_str(), r.pattern(), &*r.word), ("GET", "/a/:id:Int/b", "/a/{id}/b".to_string(), "w"));
-    let names = |cs: Vec<&naga::ast::Col>| cs.iter().map(|c| format!("{}:{}{}", c.name, c.ty.name(), if c.opt { "?" } else { "" })).collect::<Vec<_>>().join(" ");
+    let names = |ds: Vec<&naga::ast::FieldDecl>| ds.iter().map(|d| d.show(":")).collect::<Vec<_>>().join(" ");
     assert_eq!(names(r.params().collect()), "id:Int q:Text n:Num?");
     assert_eq!(names(r.body.iter().flatten().collect()), "x:Const y:Json?");
     assert_eq!(r.decl(), "GET /a/:id:Int/b?q:Text&n:Num? {x: Const, y: Json?}");
     assert!(parse("route = nop\n").routes.is_empty(), "a word may still be called route");
+    let p = parse("route POST /t {lines: [{sku: Const, qty: Int}], tags: [Text]?, meta: {by: Text}?}\n  = w\nw = nop\n");
+    assert!(p.errors.is_empty(), "{:?}", p.errors);
+    assert_eq!(p.routes[0].decl(), "POST /t {lines: [{sku: Const, qty: Int}], tags: [Text]?, meta: {by: Text}?}");
 }
 
 #[test]
@@ -89,6 +96,9 @@ fn route_errors() {
     assert_eq!(first("route GET /a/:id = w\nw = nop"), "1:10 “id”: write name:Type, with Type one of Int, Num, Text, Bool, Const, Json");
     assert_eq!(first("route GET /a?time:Text = w\nw = nop"), "1:10 route GET /a: time can't be a param, the router sets it");
     assert_eq!(first("route GET /a/:x:Int?x:Int = w\nw = nop"), "1:10 route GET /a/:x:Int: x can't be a param, it's already a param");
+    assert_eq!(first("route POST /a {x: [Int} = w\nw = nop"), "1:22 expected “]” to close the list type, found “}”");
+    assert_eq!(first("route POST /a {x: Date} = w\nw = nop"), "1:18 types are Int, Num, Text, Bool, Const, Json, [Type] and {field: Type} (add ? when it may be missing, like Text?)");
+    assert_eq!(first("table ts :: {x: [Int]}"), "1:16 column types are Int, Num, Text, Bool, Const, Json (add ? for an optional column, like Text?)");
     assert_eq!(first("route GET /a = missing"), "1:0 route GET /a: missing isn't defined");
     assert_eq!(first("route GET /a/:x:Int = w\nroute POST /a/:x:Int = w\nroute POST /a/:x:Text = w\nw = nop"), "3:0 route POST /a/:x:Text is already declared on line 2");
     assert_eq!(first("route GET /a/:x:Int = w\nroute POST /a/:y:Int = w\nw = nop"), "2:0 route POST /a/:y:Int: name the params as on line 1 (/a/:x:Int)");
@@ -111,4 +121,8 @@ fn routes_are_checked_as_call_sites() {
         ["2:4 w needs q, but nothing on this path provides it (w) (when route GET /x runs)"]
     );
     assert!(errors("route POST /x {n: Num} = w\nw = +{status: 201, json: body.n + 1}\n").is_empty());
+    let nested = |read: &str| errors(&format!("route POST /x {{items: [{{n: Num}}]}} = w\nw = @body( @items( +{{m: {read} * 2}} ) ) +{{status: 200, json: body}}\n"));
+    assert!(nested("n").is_empty());
+    assert_eq!(nested("k"), ["2:19 w needs body.items.k, but nothing on this path provides it (w) (when route POST /x runs)"]);
+    assert!(errors(&ledger()).is_empty(), "{:?}", errors(&ledger()));
 }

@@ -94,6 +94,12 @@ pub fn strip_comment(line: &str) -> &str {
 }
 
 pub fn lex_line(src: &str, line: usize) -> R<Vec<Token>> {
+    lex(src, line, false)
+}
+
+/// `types`: a route's field types, where `?` glued to `]` or `}` marks an optional field
+/// (elsewhere it opens a hole).
+fn lex(src: &str, line: usize, types: bool) -> R<Vec<Token>> {
     let cs: Vec<char> = src.chars().collect();
     // UTF-16 column of each char index
     let mut col = vec![0; cs.len() + 1];
@@ -145,7 +151,7 @@ pub fn lex_line(src: &str, line: usize) -> R<Vec<Token>> {
             push(Tk::Str(s), j + 1 - i, &mut i);
             continue;
         }
-        if c == '?' && i > 0 && id_cont(cs[i - 1]) {
+        if c == '?' && i > 0 && (id_cont(cs[i - 1]) || types && matches!(cs[i - 1], ']' | '}')) {
             push(Tk::Op("?"), 1, &mut i);
             continue;
         }
@@ -808,10 +814,11 @@ fn singular(name: &str) -> Option<String> {
     None
 }
 
-/// `{name: Type, opt: Type?, …}`; in a table, `id` is implicit and only checked.
-fn cols(ts: &mut Ts, table: bool) -> R<Vec<Col>> {
+/// `{name: Type, opt: Type?, …}`. In a route, types nest (`[Type]`, `{…}`); in a table,
+/// they're column types and `id` is implicit, only checked.
+fn field_decls(ts: &mut Ts, table: bool) -> R<Vec<FieldDecl>> {
     ts.expect_op("{", "to start the columns")?;
-    let mut cols: Vec<Col> = vec![];
+    let mut decls: Vec<FieldDecl> = vec![];
     loop {
         if ts.at_end() {
             return ts.err("the column list is missing its “}”", None);
@@ -829,14 +836,10 @@ fn cols(ts: &mut Ts, table: bool) -> R<Vec<Col>> {
             Some(n) if !is_keyword(n) => n.clone(),
             _ => return ts.err("expected a column name", id.as_ref()),
         };
-        let (mut ty, mut opt) = (ColType::Json, true);
+        let (mut ty, mut opt) = (FieldTy::Col(ColType::Json), true);
         if ts.is_op(":", 0) {
             ts.next();
-            let t = ts.next();
-            let Some(found) = id_of(&t).and_then(|v| ColType::ALL.iter().find(|(k, _)| *k == &**v)) else {
-                return ts.err("column types are Int, Num, Text, Bool, Const, Json (add ? for an optional column, like Text?)", t.as_ref().or(id.as_ref()));
-            };
-            ty = found.1;
+            ty = field_ty(ts, !table, id.as_ref())?;
             opt = false;
             if ts.is_op("?", 0) {
                 ts.next();
@@ -844,17 +847,35 @@ fn cols(ts: &mut Ts, table: bool) -> R<Vec<Col>> {
             }
         }
         if table && &*cname == "id" {
-            if ty != ColType::Int && ty != ColType::Json {
+            if !matches!(ty, FieldTy::Col(ColType::Int | ColType::Json)) {
                 return ts.err("id is always an Int", id.as_ref());
             }
             continue;
         }
-        if cols.iter().any(|c| c.name == cname) {
+        if decls.iter().any(|c| c.name == cname) {
             return ts.err(format!("{cname} is listed twice"), id.as_ref());
         }
-        cols.push(Col { name: cname, ty, opt });
+        decls.push(FieldDecl { name: cname, ty, opt });
     }
-    Ok(cols)
+    Ok(decls)
+}
+
+fn field_ty(ts: &mut Ts, nested: bool, at: Option<&Token>) -> R<FieldTy> {
+    if nested && ts.is_op("{", 0) {
+        return Ok(FieldTy::Rec(field_decls(ts, false)?));
+    }
+    if nested && ts.is_op("[", 0) {
+        ts.next();
+        let t = field_ty(ts, true, at)?;
+        ts.expect_op("]", "to close the list type")?;
+        return Ok(FieldTy::List(Box::new(t)));
+    }
+    let t = ts.next();
+    match id_of(&t).and_then(|v| ColType::ALL.iter().find(|(k, _)| *k == &**v)) {
+        Some((_, c)) => Ok(FieldTy::Col(*c)),
+        None if nested => ts.err("types are Int, Num, Text, Bool, Const, Json, [Type] and {field: Type} (add ? when it may be missing, like Text?)", t.as_ref().or(at)),
+        None => ts.err("column types are Int, Num, Text, Bool, Const, Json (add ? for an optional column, like Text?)", t.as_ref().or(at)),
+    }
 }
 
 fn table(ts: &mut Ts) -> R<Table> {
@@ -884,7 +905,11 @@ fn table(ts: &mut Ts) -> R<Table> {
     if ts.is_op(":", 0) {
         ts.next();
     }
-    let cols = cols(ts, true)?;
+    let cols = field_decls(ts, true)?.into_iter().map(|f| match f.ty {
+        FieldTy::Col(ty) => Col { name: f.name, ty, opt: f.opt },
+        _ => unreachable!("a table's fields are column types"),
+    });
+    let cols = cols.collect();
     if let Some(t) = ts.peek(0) {
         return ts.err(format!("unexpected “{}” after the columns", t.raw), None);
     }
@@ -930,7 +955,7 @@ pub fn parse(src: &str) -> Program {
 }
 
 /// `name:Type`, with a trailing `?` when `opt` allows it.
-fn param(src: &str, opt: bool) -> Result<Col, String> {
+fn param(src: &str, opt: bool) -> Result<FieldDecl, String> {
     let bad = || format!("“{src}”: write name:Type, with Type one of Int, Num, Text, Bool, Const, Json{}", if opt { " (add ? if it may be missing)" } else { "" });
     let (name, ty) = src.split_once(':').ok_or_else(bad)?;
     let (ty, is_opt) = match ty.strip_suffix('?') {
@@ -941,11 +966,11 @@ fn param(src: &str, opt: bool) -> Result<Col, String> {
     if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
         return Err(bad());
     }
-    Ok(Col { name: name.into(), ty, opt: is_opt })
+    Ok(FieldDecl { name: name.into(), ty: FieldTy::Col(ty), opt: is_opt })
 }
 
 /// `/lit/:name:Type…?name:Type[?]&…`
-fn path(src: &str) -> Result<(Vec<Seg>, Vec<Col>), String> {
+fn path(src: &str) -> Result<(Vec<Seg>, Vec<FieldDecl>), String> {
     let (path, query) = src.split_once('?').unwrap_or((src, ""));
     let Some(rest) = path.strip_prefix('/') else { return Err(format!("a route path starts with /, got “{path}”")) };
     let segs = rest.split('/').filter(|s| !rest.is_empty() || !s.is_empty()).map(|s| match s.strip_prefix(':') {
@@ -971,9 +996,9 @@ fn route(lines: &[String], ch: &[usize]) -> R<Route> {
     let col = first[..pa].encode_utf16().count();
     let (segs, query) = path(src).or_else(|msg| serr(msg, Some((line, col))))?;
     let blanked = format!("{}{}{}", &first[..pa], " ".repeat(pb - pa), &first[pb..]);
-    let mut toks = lex_line(&blanked, line)?;
+    let mut toks = lex(&blanked, line, true)?;
     for &li in &ch[1..] {
-        toks.extend(lex_line(strip_comment(&lines[li]), li + 1)?);
+        toks.extend(lex(strip_comment(&lines[li]), li + 1, true)?);
     }
     let mut ts = Ts { t: toks, i: 0, lines };
     ts.next();
@@ -985,7 +1010,7 @@ fn route(lines: &[String], ch: &[usize]) -> R<Route> {
     if src.is_empty() {
         return serr(format!("route {verb} needs a path, like /accounts/:id:Int"), Some((line, col)));
     }
-    let body = if ts.is_op("{", 0) { Some(cols(&mut ts, false)?) } else { None };
+    let body = if ts.is_op("{", 0) { Some(field_decls(&mut ts, false)?) } else { None };
     ts.expect_op("=", "before the word that answers the route")?;
     let w = ts.next();
     let Some(word) = id_of(&w).filter(|n| !is_keyword(n)).cloned() else { return ts.err("expected the word that answers the route", w.as_ref()) };

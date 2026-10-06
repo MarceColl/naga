@@ -241,15 +241,45 @@ enum Out {
 
 impl Store {
     pub fn new(p: &Program) -> Result<Store, RunError> {
-        let db = Connection::open_in_memory().map_err(sql_err)?;
-        let mut s = Store { db, log: vec![], tick: -1 };
+        Ok(Self::at(Connection::open_in_memory(), p)?.0)
+    }
+
+    /// A database file that outlives the run, with the tables it had to create.
+    pub fn open(p: &Program, path: &std::path::Path) -> Result<(Store, Vec<Name>), RunError> {
+        Self::at(Connection::open(path), p)
+    }
+
+    fn at(db: rusqlite::Result<Connection>, p: &Program) -> Result<(Store, Vec<Name>), RunError> {
+        let mut s = Store { db: db.map_err(sql_err)?, log: vec![], tick: -1 };
+        let mut created = vec![];
         for t in p.tables.values() {
+            let exists = s.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1").and_then(|mut st| st.exists([&*t.name])).map_err(sql_err)?;
+            if exists {
+                continue;
+            }
             let cols: Vec<String> = std::iter::once("\"id\" INTEGER PRIMARY KEY".to_string())
                 .chain(t.cols.iter().map(|c| format!("{} {}{}", qi(&c.name), c.ty.sql(), if c.opt { "" } else { " NOT NULL" })))
                 .collect();
             s.q(&format!("CREATE TABLE {} ({})", qi(&t.name), cols.join(", ")), vec![], true, false)?;
+            created.push(t.name.clone());
         }
-        Ok(s)
+        Ok((s, created))
+    }
+
+    /// Runs the seeds of the tables in `only`; a failure carries the seed's line.
+    pub fn seed(&mut self, p: &Program, only: &[Name]) -> Result<(), (usize, RunError)> {
+        for sd in p.seeds.iter().filter(|sd| only.contains(&sd.table)) {
+            let Some(t) = p.tables.get(&sd.table) else { continue };
+            let at = |e| (sd.line, e);
+            let rows = eval(&sd.expr, &Env { subj: &Rec::new(), now: 0.0, outer: &[] }).map_err(at)?;
+            let Value::List(rows) = rows else {
+                return Err(at(RunError { msg: format!("seed {} needs a list of records, got {}", sd.table, rows.type_name()), details: vec![] }));
+            };
+            for r in rows.iter() {
+                self.insert(t, r).map_err(at)?;
+            }
+        }
+        Ok(())
     }
 
     fn q(&mut self, sql: &str, params: Vec<Sql>, run: bool, silent: bool) -> Result<Out, RunError> {

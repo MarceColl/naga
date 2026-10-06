@@ -256,11 +256,11 @@ pub struct Runtime<'a> {
     pub store_error: Option<&'a str>,
 }
 
-pub fn initial(p: &Program, entry: &Name) -> State {
+pub fn initial(p: &Program, entry: &Name, subj: Rc<Rec>) -> State {
     let line = p.words.get(entry).map_or(0, |w| w.line);
     let call = Stmt { kind: StmtKind::Call(entry.clone()), pos: Pos { line, col: 0 } };
     State {
-        subj: Rc::new(Rec::new()),
+        subj,
         k: vec![Frame::Seq { body: Rc::from(vec![call]), i: 0, lvl: 0 }],
         tick: 0,
         out_len: 0,
@@ -527,26 +527,14 @@ impl<'p> Session<'p> {
         let mut store_error = None;
         let mut err: Option<(usize, String)> = None;
         if !p.tables.is_empty() {
-            let mut line = p.tables[0].line;
-            let res = Store::new(p).and_then(|s| {
-                let st = store.insert(s);
-                for sd in &p.seeds {
-                    let Some(t) = p.tables.get(&sd.table) else { continue };
-                    line = sd.line;
-                    let rows = eval(&sd.expr, &Env { subj: &Rec::new(), now: 0.0, outer: &[] })?;
-                    let Value::List(rows) = rows else { return fail(format!("seed {} needs a list of records, got {}", sd.table, rows.type_name())) };
-                    for r in rows.iter() {
-                        st.insert(t, r)?;
-                    }
-                }
-                Ok(())
-            });
-            if let Err(e) = res {
+            let all: Vec<Name> = p.tables.keys().cloned().collect();
+            let res = Store::new(p).map_err(|e| (p.tables[0].line, e)).and_then(|s| store.insert(s).seed(p, &all));
+            if let Err((line, e)) = res {
                 store_error = Some(e.msg.clone());
                 err = Some((line, e.msg));
             }
         }
-        let mut init = initial(p, entry);
+        let mut init = initial(p, entry, Rc::new(Rec::new()));
         if let Some((line, msg)) = err {
             init.status = Status::Error;
             init.error = Some(Failure { msg, details: vec![], line });

@@ -237,15 +237,25 @@ pub fn project(v: &Value, names: &[Name]) -> Result<Value, RunError> {
 
 // ---- JSON, for Json columns: constants travel as {"$sym": name} ----
 pub fn to_json(v: &Value) -> String {
+    json(v, false)
+}
+
+/// JSON for the outside world: a constant is just its name.
+pub fn to_plain_json(v: &Value) -> String {
+    json(v, true)
+}
+
+fn json(v: &Value, plain: bool) -> String {
     match v {
         Value::Nil => "null".into(),
         Value::Bool(b) => b.to_string(),
         Value::Num(n) if n.is_finite() => num::js(*n),
         Value::Num(_) => "null".into(),
         Value::Text(s) => num::json_str(s),
+        Value::Const(c) if plain => num::json_str(c),
         Value::Const(c) => format!("{{\"$sym\":{}}}", num::json_str(c)),
-        Value::List(xs) => format!("[{}]", xs.iter().map(to_json).collect::<Vec<_>>().join(",")),
-        Value::Rec(r) => format!("{{{}}}", r.iter().map(|(k, x)| format!("{}:{}", num::json_str(k), to_json(x))).collect::<Vec<_>>().join(",")),
+        Value::List(xs) => format!("[{}]", xs.iter().map(|x| json(x, plain)).collect::<Vec<_>>().join(",")),
+        Value::Rec(r) => format!("{{{}}}", r.iter().map(|(k, x)| format!("{}:{}", num::json_str(k), json(x, plain))).collect::<Vec<_>>().join(",")),
     }
 }
 

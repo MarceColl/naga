@@ -1,0 +1,155 @@
+-- The ledger from ledger.nag, served:   naga serve examples/ledger-server.nag
+-- Personal accounting, double-entry. Amounts are cents; debits are positive.
+-- Each route hands its word path params and query fields at the top level, the JSON
+-- body in `body` and the time in `time`. Every route word leaves {status, json}.
+
+table accounts     :: {name: Text, kind: Const, archived: Bool}
+table transactions :: {date: Text, payee: Text, memo: Text?}
+table postings     :: {tx-id: Int, account-id: Int, amount: Num, date: Text}
+
+seed accounts = [{name: "Checking", kind: Asset, archived: false},
+                 {name: "Savings", kind: Asset, archived: false},
+                 {name: "Credit card", kind: Liability, archived: false},
+                 {name: "Salary", kind: Income, archived: false},
+                 {name: "Groceries", kind: Expense, archived: false},
+                 {name: "Rent", kind: Expense, archived: false},
+                 {name: "Opening balances", kind: Equity, archived: false}]
+
+seed transactions = [{date: "2026-09-01", payee: "Opening balance"},
+                     {date: "2026-09-25", payee: "Acme Payroll"},
+                     {date: "2026-09-27", payee: "Landlord"}]
+
+seed postings = [{tx-id: 1, account-id: 1, amount: 250000, date: "2026-09-01"},
+                 {tx-id: 1, account-id: 7, amount: -250000, date: "2026-09-01"},
+                 {tx-id: 2, account-id: 1, amount: 310000, date: "2026-09-25"},
+                 {tx-id: 2, account-id: 4, amount: -310000, date: "2026-09-25"},
+                 {tx-id: 3, account-id: 6, amount: 120000, date: "2026-09-27"},
+                 {tx-id: 3, account-id: 1, amount: -120000, date: "2026-09-27"}]
+
+route GET    /accounts                                        = get-accounts
+route GET    /accounts/:id:Int                                = get-account
+route POST   /accounts {name: Text, kind: Const}              = post-account
+route PATCH  /accounts/:id:Int {name: Text?, archived: Bool?} = patch-account
+route DELETE /accounts/:id:Int                                = delete-account
+route GET    /transactions?account:Int?                       = get-transactions
+route GET    /transactions/:id:Int                            = get-transaction
+route POST   /transactions {date: Text, payee: Text, postings: Json} = post-transaction
+route DELETE /transactions/:id:Int                            = delete-transaction
+route GET    /reports/balance-sheet                           = get-balance-sheet
+route GET    /reports/income?from:Text&to:Text                = get-income
+
+reply = .{status json}
+
+get-accounts = accounts.where {archived: false} @accounts( with-balance )
+               +{status: 200, json: accounts} reply
+
+with-balance = postings.where when account-id == ^id
+               +{balance: sum(postings.amount)} -{postings}
+
+get-account = accounts.get account-found reply
+
+account-found {-missing} = +{status: 404, json: "no such account"}
+account-found {account}  = @account( with-balance recent ) +{status: 200, json: account}
+
+recent = postings.where when account-id == ^id +{recent: postings} -{postings}
+
+-- body: {name, kind}
+post-account = @body( kind-ok ) create-account reply
+
+kind-ok {kind: Asset}     = nop
+kind-ok {kind: Liability} = nop
+kind-ok {kind: Income}    = nop
+kind-ok {kind: Expense}   = nop
+kind-ok {kind: Equity}    = nop
+kind-ok                   = +{problem: "kind must be Asset, Liability, Income, Expense or Equity"}
+
+create-account {body: {problem}} = +{status: 422, json: body.problem}
+create-account = +{account: {name: body.name, kind: body.kind, archived: false}}
+                 accounts.insert +{status: 201, json: account}
+
+-- body: any of {name, archived}
+patch-account = +{changes: body} -{body} accounts.update account-updated reply
+
+account-updated {-missing} = +{status: 404, json: "no such account"}
+account-updated {account}  = +{status: 200, json: account}
+
+-- refused while postings use it
+delete-account = postings.where when account-id == ^id can-delete reply
+
+can-delete when len(postings) > 0 = +{status: 409, json: "account has postings — archive it instead"}
+can-delete                        = accounts.delete account-deleted
+
+account-deleted {-missing} = +{status: 404, json: "no such account"}
+account-deleted {-deleted} = +{status: 204, json: nil}
+
+get-transactions {account} = postings.where when account-id == ^account
+                             @postings( with-payee ) +{status: 200, json: postings} reply
+get-transactions           = transactions.all +{status: 200, json: transactions} reply
+
+with-payee = -{id} +{id: tx-id} transactions.get attach-payee
+
+attach-payee {transaction} = +{payee: transaction.payee} -{transaction, id}
+attach-payee {-missing}    = +{payee: "?"} -{id}
+
+get-transaction = transactions.get tx-found reply
+
+tx-found {-missing}    = +{status: 404, json: "no such transaction"}
+tx-found {transaction} = @transaction( lines ) +{status: 200, json: transaction}
+
+lines = postings.where when tx-id == ^id +{lines: postings} -{postings}
+
+-- body: {date, payee, postings: [{account-id, amount}]}
+post-transaction = check-lines reply
+
+check-lines when len(body.postings) < 2 =
+  +{status: 422, json: "a transaction needs at least two postings"}
+check-lines when sum(body.postings.amount) ≠ 0 =
+  +{status: 422, json: "postings must balance; these sum to {sum(body.postings.amount)}"}
+check-lines = @body( @postings( check-account ) ) count-problems
+
+check-account = +{id: account-id} accounts.get usable -{id}
+
+usable {-missing}                  = +{bad: 1}
+usable {account: {archived: true}} = -{account} +{bad: 1}
+usable {-account}                  = +{bad: 0}
+
+count-problems when sum(body.postings.bad) > 0 =
+  +{status: 422, json: "postings use missing or archived accounts"}
+count-problems = +{transaction: {date: body.date, payee: body.payee}} transactions.insert
+                 @body( @postings( store-posting ) )
+                 +{status: 201, json: transaction}
+
+store-posting = +{posting: {tx-id: ^^transaction.id, account-id: account-id,
+                            amount: amount, date: ^date}}
+                postings.insert -{posting, bad}
+
+delete-transaction = postings.where when tx-id == ^id @postings( postings.delete .{id} )
+                     -{postings} transactions.delete tx-deleted reply
+
+tx-deleted {-missing} = +{status: 404, json: "no such transaction"}
+tx-deleted {-deleted} = +{status: 204, json: nil}
+
+get-balance-sheet =
+  +{assets: {kind: Asset}, liabilities: {kind: Liability}, equity: {kind: Equity}}
+  (@assets( kind-total ) ‖ @liabilities( kind-total ) ‖ @equity( kind-total ))
+  +{status: 200, json: {assets: assets.total, liabilities: liabilities.total,
+                        equity: equity.total, net-worth: assets.total + liabilities.total}}
+  reply
+
+kind-total = accounts.where when kind == ^kind @accounts( with-balance )
+             +{total: sum(accounts.balance)}
+
+-- dates as text, to is exclusive
+get-income = +{income: {kind: Income}, expenses: {kind: Expense}}
+             (@income( kind-flow ) ‖ @expenses( kind-flow ))
+             +{status: 200, json: {income: -income.total, expenses: expenses.total,
+                                   net: -(income.total + expenses.total),
+                                   by-account: income.accounts ++ expenses.accounts}}
+             reply
+
+kind-flow = accounts.where when kind == ^kind @accounts( flow .{name flow} )
+            +{total: sum(accounts.flow)}
+
+-- inside a where, ^ is the record being processed; ^^^ is two records further out
+flow = postings.where when account-id == ^id and date ≥ ^^^from and date < ^^^to
+       +{flow: sum(postings.amount)} -{postings}

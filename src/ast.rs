@@ -243,6 +243,55 @@ pub struct Seed {
     pub line: usize,
 }
 
+pub const VERBS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+
+#[derive(Clone, Debug)]
+pub enum Seg {
+    Lit(String),
+    Param(Col),
+}
+
+/// `route VERB /path/:id:Int?q:Text {body: Type} = word`: params land at the top level, the body in `body`.
+#[derive(Clone, Debug)]
+pub struct Route {
+    pub verb: Name,
+    /// As written, before the query: `/accounts/:id:Int`.
+    pub path: String,
+    pub segs: Vec<Seg>,
+    pub query: Vec<Col>,
+    pub body: Option<Vec<Col>>,
+    pub word: Name,
+    pub line: usize,
+}
+
+impl Route {
+    /// The path as axum matches it: `/accounts/{id}`.
+    pub fn pattern(&self) -> String {
+        self.join(|c| format!("{{{}}}", c.name))
+    }
+    /// The path without param names: `/a/{x}` and `/a/{y}` are one path to the matcher, whatever the verb.
+    pub fn shape(&self) -> String {
+        self.join(|_| "{}".into())
+    }
+    fn join(&self, param: impl Fn(&Col) -> String) -> String {
+        let segs = self.segs.iter().map(|s| match s {
+            Seg::Lit(l) => l.clone(),
+            Seg::Param(c) => param(c),
+        });
+        format!("/{}", segs.collect::<Vec<_>>().join("/"))
+    }
+    pub fn path_params(&self) -> impl Iterator<Item = &Col> {
+        self.segs.iter().filter_map(|s| match s {
+            Seg::Param(c) => Some(c),
+            Seg::Lit(_) => None,
+        })
+    }
+    /// Every field the route puts at the top level of the record, besides `body` and `time`.
+    pub fn params(&self) -> impl Iterator<Item = &Col> {
+        self.path_params().chain(&self.query)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Diag {
     pub line: usize,
@@ -263,6 +312,7 @@ pub struct Program {
     pub words: IndexMap<Name, Word>,
     pub tables: IndexMap<Name, Table>,
     pub seeds: Vec<Seed>,
+    pub routes: Vec<Route>,
     pub errors: Vec<Diag>,
     pub warnings: Vec<Diag>,
     pub holes: Vec<Hole>,

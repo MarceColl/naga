@@ -808,33 +808,8 @@ fn singular(name: &str) -> Option<String> {
     None
 }
 
-fn table(ts: &mut Ts) -> R<Table> {
-    ts.next();
-    let name_tok = ts.next().unwrap();
-    let Tk::Id(name) = name_tok.t.clone() else { unreachable!() };
-    let single = if ts.is_id("of") {
-        ts.next();
-        let s = ts.next();
-        match id_of(&s) {
-            Some(v) => Some(v.to_string()),
-            None => return ts.err("expected the name of one row after “of”", s.as_ref()),
-        }
-    } else {
-        singular(&name)
-    };
-    let Some(single) = single else {
-        return ts.err(format!("can't guess what one row of {name} is called — write table {name} of item :: {{…}}"), Some(&name_tok));
-    };
-    if *single == *name {
-        return ts.err("the row name has to differ from the table name", Some(&name_tok));
-    }
-    if !ts.is_op(":", 0) {
-        return ts.err(format!("expected “::” after table {name}"), None);
-    }
-    ts.next();
-    if ts.is_op(":", 0) {
-        ts.next();
-    }
+/// `{name: Type, opt: Type?, …}`; in a table, `id` is implicit and only checked.
+fn cols(ts: &mut Ts, table: bool) -> R<Vec<Col>> {
     ts.expect_op("{", "to start the columns")?;
     let mut cols: Vec<Col> = vec![];
     loop {
@@ -868,7 +843,7 @@ fn table(ts: &mut Ts) -> R<Table> {
                 opt = true;
             }
         }
-        if &*cname == "id" {
+        if table && &*cname == "id" {
             if ty != ColType::Int && ty != ColType::Json {
                 return ts.err("id is always an Int", id.as_ref());
             }
@@ -879,6 +854,37 @@ fn table(ts: &mut Ts) -> R<Table> {
         }
         cols.push(Col { name: cname, ty, opt });
     }
+    Ok(cols)
+}
+
+fn table(ts: &mut Ts) -> R<Table> {
+    ts.next();
+    let name_tok = ts.next().unwrap();
+    let Tk::Id(name) = name_tok.t.clone() else { unreachable!() };
+    let single = if ts.is_id("of") {
+        ts.next();
+        let s = ts.next();
+        match id_of(&s) {
+            Some(v) => Some(v.to_string()),
+            None => return ts.err("expected the name of one row after “of”", s.as_ref()),
+        }
+    } else {
+        singular(&name)
+    };
+    let Some(single) = single else {
+        return ts.err(format!("can't guess what one row of {name} is called — write table {name} of item :: {{…}}"), Some(&name_tok));
+    };
+    if *single == *name {
+        return ts.err("the row name has to differ from the table name", Some(&name_tok));
+    }
+    if !ts.is_op(":", 0) {
+        return ts.err(format!("expected “::” after table {name}"), None);
+    }
+    ts.next();
+    if ts.is_op(":", 0) {
+        ts.next();
+    }
+    let cols = cols(ts, true)?;
     if let Some(t) = ts.peek(0) {
         return ts.err(format!("unexpected “{}” after the columns", t.raw), None);
     }
@@ -923,7 +929,87 @@ pub fn parse(src: &str) -> Program {
     p
 }
 
+/// `name:Type`, with a trailing `?` when `opt` allows it.
+fn param(src: &str, opt: bool) -> Result<Col, String> {
+    let bad = || format!("“{src}”: write name:Type, with Type one of Int, Num, Text, Bool, Const, Json{}", if opt { " (add ? if it may be missing)" } else { "" });
+    let (name, ty) = src.split_once(':').ok_or_else(bad)?;
+    let (ty, is_opt) = match ty.strip_suffix('?') {
+        Some(t) if opt => (t, true),
+        _ => (ty, false),
+    };
+    let ty = ColType::ALL.iter().find(|(k, _)| *k == ty).ok_or_else(bad)?.1;
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        return Err(bad());
+    }
+    Ok(Col { name: name.into(), ty, opt: is_opt })
+}
+
+/// `/lit/:name:Type…?name:Type[?]&…`
+fn path(src: &str) -> Result<(Vec<Seg>, Vec<Col>), String> {
+    let (path, query) = src.split_once('?').unwrap_or((src, ""));
+    let Some(rest) = path.strip_prefix('/') else { return Err(format!("a route path starts with /, got “{path}”")) };
+    let segs = rest.split('/').filter(|s| !rest.is_empty() || !s.is_empty()).map(|s| match s.strip_prefix(':') {
+        Some(p) => param(p, false).map(Seg::Param),
+        None if s.is_empty() || s.contains(['{', '}', ':', '*']) => Err(format!("“{s}” can't be a path segment in “{path}”")),
+        None => Ok(Seg::Lit(s.into())),
+    });
+    let query = query.split('&').filter(|q| !q.is_empty()).map(|q| param(q, true));
+    Ok((segs.collect::<Result<_, _>>()?, query.collect::<Result<_, _>>()?))
+}
+
+/// The path is read as raw text (the lexer would see `//` and `:` as operators); the rest is lexed with it blanked out.
+fn route(lines: &[String], ch: &[usize]) -> R<Route> {
+    let first = strip_comment(&lines[ch[0]]);
+    let line = ch[0] + 1;
+    let word_after = |from: usize| {
+        let a = from + first[from..].find(|c: char| !c.is_whitespace()).unwrap_or(first.len() - from);
+        (a, a + first[a..].find(char::is_whitespace).unwrap_or(first.len() - a))
+    };
+    let (_, verb_end) = word_after("route".len());
+    let (pa, pb) = word_after(verb_end);
+    let src = &first[pa..pb];
+    let col = first[..pa].encode_utf16().count();
+    let (segs, query) = path(src).or_else(|msg| serr(msg, Some((line, col))))?;
+    let blanked = format!("{}{}{}", &first[..pa], " ".repeat(pb - pa), &first[pb..]);
+    let mut toks = lex_line(&blanked, line)?;
+    for &li in &ch[1..] {
+        toks.extend(lex_line(strip_comment(&lines[li]), li + 1)?);
+    }
+    let mut ts = Ts { t: toks, i: 0, lines };
+    ts.next();
+    let v = ts.next();
+    let verb = match id_of(&v) {
+        Some(v) if VERBS.contains(&&**v) => v.clone(),
+        _ => return ts.err(format!("a route starts with a verb: {}", VERBS.join(", ")), v.as_ref()),
+    };
+    if src.is_empty() {
+        return serr(format!("route {verb} needs a path, like /accounts/:id:Int"), Some((line, col)));
+    }
+    let body = if ts.is_op("{", 0) { Some(cols(&mut ts, false)?) } else { None };
+    ts.expect_op("=", "before the word that answers the route")?;
+    let w = ts.next();
+    let Some(word) = id_of(&w).filter(|n| !is_keyword(n)).cloned() else { return ts.err("expected the word that answers the route", w.as_ref()) };
+    if let Some(t) = ts.peek(0) {
+        return ts.err(format!("unexpected “{}” after route {verb} {src} = {word}", t.raw), None);
+    }
+    let r = Route { verb, path: src.split('?').next().unwrap().into(), segs, query, body, word, line };
+    let mut seen: Vec<&str> = vec!["body", "time"];
+    for c in r.params() {
+        if seen.contains(&&*c.name) {
+            let why = if ["body", "time"].contains(&&*c.name) { "the router sets it" } else { "it's already a param" };
+            return serr(format!("route {} {}: {} can't be a param, {why}", r.verb, r.path, c.name), Some((line, col)));
+        }
+        seen.push(&c.name);
+    }
+    Ok(r)
+}
+
 fn chunk(p: &mut Program, lines: &[String], ch: &[usize]) -> R<()> {
+    let mut head = strip_comment(&lines[ch[0]]).split_whitespace();
+    if head.next() == Some("route") && head.next().is_some_and(|v| v.chars().all(|c| c.is_ascii_uppercase())) {
+        p.routes.push(route(lines, ch)?);
+        return Ok(());
+    }
     let mut toks = vec![];
     for &li in ch {
         toks.extend(lex_line(strip_comment(&lines[li]), li + 1)?);
@@ -978,6 +1064,16 @@ fn check_refs(p: &mut Program) {
         if !p.tables.contains_key(&sd.table) {
             errors.push(Diag { line: sd.line, col: 0, msg: format!("seed {0}: there's no table called {0}", sd.table) });
         }
+    }
+    for (i, r) in p.routes.iter().enumerate() {
+        if !p.words.contains_key(&r.word) {
+            errors.push(Diag { line: r.line, col: 0, msg: format!("route {} {}: {} isn't defined", r.verb, r.path, r.word) });
+        }
+        let same = p.routes[..i].iter().filter(|q| q.shape() == r.shape());
+        let msg = (same.clone().find(|q| q.pattern() != r.pattern()))
+            .map(|q| format!("route {} {}: name the params as on line {} ({})", r.verb, r.path, q.line, q.path))
+            .or_else(|| same.clone().find(|q| q.verb == r.verb).map(|q| format!("route {} {} is already declared on line {}", r.verb, r.path, q.line)));
+        errors.extend(msg.map(|msg| Diag { line: r.line, col: 0, msg }));
     }
     p.errors.extend(errors);
     p.warnings = warnings;

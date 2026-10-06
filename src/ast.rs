@@ -245,6 +245,9 @@ pub struct Seed {
     pub line: usize,
 }
 
+/// Names and raw values: path params, query fields.
+pub type Pairs = Vec<(String, String)>;
+
 pub const VERBS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
 /// A route field's type: a column type, a list of one, or a nested record.
@@ -320,6 +323,22 @@ impl Route {
         let body = self.body.clone().map(|fs| format!(" {}", FieldTy::Rec(fs)));
         format!("{} {}{}{query}{}", self.verb, self.path, if query.is_empty() { "" } else { "?" }, body.unwrap_or_default())
     }
+    /// The path params of a concrete path such as `/accounts/7`, when it is one of this route's.
+    pub fn bind(&self, path: &str) -> Option<Pairs> {
+        let parts: Vec<&str> = path.strip_prefix('/')?.split('/').filter(|x| !x.is_empty()).collect();
+        if parts.len() != self.segs.len() {
+            return None;
+        }
+        let mut out = vec![];
+        for (seg, part) in self.segs.iter().zip(parts) {
+            match seg {
+                Seg::Lit(l) if l == part => {}
+                Seg::Lit(_) => return None,
+                Seg::Param(d) => out.push((d.name.to_string(), part.to_string())),
+            }
+        }
+        Some(out)
+    }
     pub fn path_params(&self) -> impl Iterator<Item = &FieldDecl> {
         self.segs.iter().filter_map(|s| match s {
             Seg::Param(c) => Some(c),
@@ -329,6 +348,35 @@ impl Route {
     /// Every field the route puts at the top level of the record, besides `body` and `time`.
     pub fn params(&self) -> impl Iterator<Item = &FieldDecl> {
         self.path_params().chain(&self.query)
+    }
+}
+
+/// One request of a run: `VERB /path?query [body] → status [json]`.
+#[derive(Clone, Debug)]
+pub struct Request {
+    pub verb: Name,
+    /// Concrete, with its query: `/transactions?account=5`.
+    pub path: String,
+    pub body: Option<Expr>,
+    pub status: u16,
+    pub json: Option<Expr>,
+    pub line: usize,
+}
+
+/// `run "name"` and its requests, sent in order against a freshly seeded database.
+#[derive(Clone, Debug)]
+pub struct Run {
+    pub name: String,
+    pub requests: Vec<Request>,
+    pub line: usize,
+}
+
+impl Program {
+    /// The route that answers `verb path`, with the path's params and its query.
+    pub fn route_for(&self, verb: &str, path: &str) -> Option<(usize, Pairs, Pairs)> {
+        let (path, query) = path.split_once('?').unwrap_or((path, ""));
+        let query: Pairs = query.split('&').filter(|q| !q.is_empty()).map(|q| q.split_once('=').unwrap_or((q, ""))).map(|(k, v)| (k.into(), v.into())).collect();
+        self.routes.iter().enumerate().filter(|(_, r)| &*r.verb == verb).find_map(|(i, r)| Some((i, r.bind(path)?, query.clone())))
     }
 }
 
@@ -353,6 +401,7 @@ pub struct Program {
     pub tables: IndexMap<Name, Table>,
     pub seeds: Vec<Seed>,
     pub routes: Vec<Route>,
+    pub runs: Vec<Run>,
     pub errors: Vec<Diag>,
     pub warnings: Vec<Diag>,
     pub holes: Vec<Hole>,

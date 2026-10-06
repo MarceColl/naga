@@ -996,16 +996,83 @@ fn path(src: &str) -> Result<(Vec<Seg>, Vec<FieldDecl>), String> {
     Ok((segs.collect::<Result<_, _>>()?, query.collect::<Result<_, _>>()?))
 }
 
+/// The byte range of the first word at or after `from`.
+fn word_at(s: &str, from: usize) -> (usize, usize) {
+    let a = from + s[from..].find(|c: char| !c.is_whitespace()).unwrap_or(s.len() - from);
+    (a, a + s[a..].find(char::is_whitespace).unwrap_or(s.len() - a))
+}
+
+/// `run "name"`, then one request per line that starts with a verb; other lines continue it.
+fn run(lines: &[String], ch: &[usize]) -> R<Run> {
+    let line = ch[0] + 1;
+    let mut ts = Ts { t: lex_line(strip_comment(&lines[ch[0]]), line)?, i: 0, lines };
+    ts.next();
+    let n = ts.next();
+    let Some(Token { t: Tk::Str(name), .. }) = n.clone() else { return ts.err("a run starts with its name in quotes: run \"…\"", n.as_ref()) };
+    if let Some(t) = ts.peek(0) {
+        return ts.err(format!("unexpected “{}”: requests go on the lines below, like  GET /accounts/1 → 200", t.raw), None);
+    }
+    let mut groups: Vec<Vec<usize>> = vec![];
+    for &li in &ch[1..] {
+        let first = strip_comment(&lines[li]).split_whitespace().next().unwrap_or("");
+        match groups.last_mut() {
+            Some(g) if !VERBS.contains(&first) => g.push(li),
+            _ => groups.push(vec![li]),
+        }
+    }
+    if groups.is_empty() {
+        return serr(format!("run \"{name}\" has no requests: add lines like  GET /accounts/1 → 200"), Some((line, 0)));
+    }
+    let requests = groups.iter().map(|g| request(lines, g)).collect::<R<Vec<_>>>()?;
+    Ok(Run { name, requests, line })
+}
+
+/// `VERB /path?query [body] → status [json]`; the path is raw text, as in a route.
+fn request(lines: &[String], g: &[usize]) -> R<Request> {
+    let first = strip_comment(&lines[g[0]]);
+    let line = g[0] + 1;
+    let col = |i: usize| first[..i].encode_utf16().count();
+    let (va, vb) = word_at(first, 0);
+    let verb = &first[va..vb];
+    if !VERBS.contains(&verb) {
+        return serr(format!("a request starts with a verb: {}", VERBS.join(", ")), Some((line, col(va))));
+    }
+    let (pa, pb) = word_at(first, vb);
+    let path = &first[pa..pb];
+    if !path.starts_with('/') {
+        return serr("a request path starts with /, like /accounts/1", Some((line, col(pa))));
+    }
+    let blanked = format!("{}{}{}", &first[..pa], " ".repeat(pb - pa), &first[pb..]);
+    let mut toks = lex_line(&blanked, line)?;
+    for &li in &g[1..] {
+        toks.extend(lex_line(strip_comment(&lines[li]), li + 1)?);
+    }
+    let mut ts = Ts { t: toks, i: 0, lines };
+    ts.next();
+    let body = if ts.is_op("→", 0) { None } else { Some(expr(&mut ts, 0)?) };
+    if !ts.is_op("→", 0) {
+        let at = ts.peek(0).or(ts.t.last()).cloned();
+        return ts.err("expected “→” before the status the request should get, like  GET /accounts/1 → 200", at.as_ref());
+    }
+    ts.next();
+    let st = ts.next();
+    let status = match st {
+        Some(Token { t: Tk::Num(n), .. }) if n.fract() == 0.0 && (100.0..600.0).contains(&n) => n as u16,
+        _ => return ts.err("expected a status from 100 to 599, like 200", st.as_ref()),
+    };
+    let json = if ts.at_end() { None } else { Some(expr(&mut ts, 0)?) };
+    if let Some(t) = ts.peek(0) {
+        return ts.err(format!("unexpected “{}” after the expected json", t.raw), None);
+    }
+    Ok(Request { verb: verb.into(), path: path.into(), body, status, json, line })
+}
+
 /// The path is read as raw text (the lexer would see `//` and `:` as operators); the rest is lexed with it blanked out.
 fn route(lines: &[String], ch: &[usize]) -> R<Route> {
     let first = strip_comment(&lines[ch[0]]);
     let line = ch[0] + 1;
-    let word_after = |from: usize| {
-        let a = from + first[from..].find(|c: char| !c.is_whitespace()).unwrap_or(first.len() - from);
-        (a, a + first[a..].find(char::is_whitespace).unwrap_or(first.len() - a))
-    };
-    let (_, verb_end) = word_after("route".len());
-    let (pa, pb) = word_after(verb_end);
+    let (_, verb_end) = word_at(first, "route".len());
+    let (pa, pb) = word_at(first, verb_end);
     let src = &first[pa..pb];
     let col = first[..pa].encode_utf16().count();
     let (segs, query) = path(src).or_else(|msg| serr(msg, Some((line, col))))?;
@@ -1044,6 +1111,10 @@ fn route(lines: &[String], ch: &[usize]) -> R<Route> {
 }
 
 fn chunk(p: &mut Program, lines: &[String], ch: &[usize]) -> R<()> {
+    if strip_comment(&lines[ch[0]]).strip_prefix("run").is_some_and(|r| r.trim_start().starts_with('"')) {
+        p.runs.push(run(lines, ch)?);
+        return Ok(());
+    }
     let mut head = strip_comment(&lines[ch[0]]).split_whitespace();
     if head.next() == Some("route") && head.next().is_some_and(|v| v.chars().all(|c| c.is_ascii_uppercase())) {
         p.routes.push(route(lines, ch)?);
@@ -1113,6 +1184,14 @@ fn check_refs(p: &mut Program) {
             .map(|q| format!("route {} {}: name the params as on line {} ({})", r.verb, r.path, q.line, q.path))
             .or_else(|| same.clone().find(|q| q.verb == r.verb).map(|q| format!("route {} {} is already declared on line {}", r.verb, r.path, q.line)));
         errors.extend(msg.map(|msg| Diag { line: r.line, col: 0, msg }));
+    }
+    for q in p.runs.iter().flat_map(|r| &r.requests) {
+        let msg = match p.route_for(&q.verb, &q.path) {
+            None => Some(format!("{} {} matches no route", q.verb, q.path)),
+            Some((i, ..)) if q.body.is_some() && p.routes[i].body.is_none() => Some(format!("route {} {} takes no body", q.verb, p.routes[i].path)),
+            _ => None,
+        };
+        errors.extend(msg.map(|msg| Diag { line: q.line, col: 0, msg }));
     }
     p.errors.extend(errors);
     p.warnings = warnings;

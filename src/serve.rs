@@ -17,14 +17,25 @@ use tokio::sync::oneshot;
 
 const BUDGET: usize = 200_000;
 
-type Pairs = Vec<(String, String)>;
+/// One request, as strings: the index of its route, its path params, its query and its body.
+pub struct Req {
+    pub route: usize,
+    pub path: Pairs,
+    pub query: Pairs,
+    pub body: String,
+}
 
-/// One request, as the interpreter receives it.
+/// What a request did: the answer, how the run stopped, what it said and the SQL it ran.
+pub struct Handled {
+    pub status: u16,
+    pub json: String,
+    pub stop: Status,
+    pub said: Vec<String>,
+    pub sql: Vec<String>,
+}
+
 struct Job {
-    route: usize,
-    path: Pairs,
-    query: Pairs,
-    body: String,
+    req: Req,
     reply: oneshot::Sender<(u16, String)>,
 }
 
@@ -45,8 +56,12 @@ pub fn start(src: String, db: std::path::PathBuf) -> Result<Router, String> {
             let routes: Vec<(String, String, String)> = p.routes.iter().map(|r| (r.verb.to_string(), r.pattern(), r.decl())).collect();
             let _ = ready_tx.send(Ok(routes));
             for job in rx {
-                let a = answer(&p, &mut store, &job);
-                let _ = job.reply.send(a);
+                let h = handle(&p, &mut store, &job.req);
+                let r = &p.routes[job.req.route];
+                for l in &h.said {
+                    println!("{} {} > {l}", r.verb, r.path);
+                }
+                let _ = job.reply.send((h.status, h.json));
             }
         })
         .map_err(|e| e.to_string())?;
@@ -57,7 +72,7 @@ pub fn start(src: String, db: std::path::PathBuf) -> Result<Router, String> {
         let tx = tx.clone();
         let handler = move |Path(path): Path<Pairs>, Query(query): Query<Pairs>, body: String| async move {
             let (reply, answer) = oneshot::channel();
-            let sent = tx.send(Job { route, path, query, body, reply }).is_ok();
+            let sent = tx.send(Job { req: Req { route, path, query, body }, reply }).is_ok();
             let (status, json) = match sent {
                 true => answer.await.unwrap_or_else(|_| (500, error("the interpreter stopped"))),
                 false => (500, error("the interpreter stopped")),
@@ -102,11 +117,12 @@ fn error(msg: &str) -> String {
     format!("{{\"error\":{}}}", json_str(msg))
 }
 
-fn answer(p: &Program, store: &mut Store, job: &Job) -> (u16, String) {
-    let r = &p.routes[job.route];
-    let subj = match request(r, job) {
+/// Decodes the request, runs its route's word on `store` and encodes the reply.
+pub fn handle(p: &Program, store: &mut Store, req: &Req) -> Handled {
+    let r = &p.routes[req.route];
+    let subj = match request(r, req) {
         Ok(s) => s,
-        Err(msg) => return (400, error(&msg)),
+        Err(msg) => return Handled { status: 400, json: error(&msg), stop: Status::Done, said: vec![], sql: vec![] },
     };
     let mut log = vec![];
     let mut s = initial(p, &r.word, Rc::new(subj));
@@ -117,21 +133,19 @@ fn answer(p: &Program, store: &mut Store, job: &Job) -> (u16, String) {
         }
         s = step(p, &s, &mut rt);
     }
-    for l in &log {
-        println!("{} {} > {l}", r.verb, r.path);
-    }
-    store.log.clear();
+    let sql = store.log.drain(..).map(|(_, l)| l).collect();
     let out = match s.status {
         Status::Done => reply(&s.subj),
         Status::Error => Err(s.error.map_or_else(String::new, |e| format!("{} (line {})", e.msg, e.line))),
         Status::Hole => Err(format!("reached a hole: {}", s.hole.unwrap_or_default())),
         Status::Ready => Err(format!("still running after {BUDGET} steps")),
     };
-    out.unwrap_or_else(|msg| (500, error(&msg)))
+    let (status, json) = out.unwrap_or_else(|msg| (500, error(&msg)));
+    Handled { status, json, stop: s.status, said: log, sql }
 }
 
 /// Path params and query fields at the top level, the body in `body`, the time in `time`.
-fn request(r: &Route, job: &Job) -> Result<Rec, String> {
+fn request(r: &Route, job: &Req) -> Result<Rec, String> {
     let raw = |pairs: &Pairs, d: &FieldDecl| pairs.iter().find(|(k, _)| **k == *d.name).map(|(_, v)| (d.name.clone(), text(d, v)));
     let given: Rec = r.path_params().filter_map(|d| raw(&job.path, d)).chain(r.query.iter().filter_map(|d| raw(&job.query, d))).collect();
     let mut rec = record(r.params(), &given, "")?;

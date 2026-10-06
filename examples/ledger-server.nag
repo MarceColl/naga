@@ -154,3 +154,42 @@ kind-flow = accounts.where when kind == ^kind @accounts( flow .{name flow} )
 -- inside a where, ^ is the record being processed; ^^^ is two records further out
 flow = postings.where when account-id == ^id and date ≥ ^^^from and date < ^^^to
        +{flow: sum(postings.amount)} -{postings}
+
+-- runs: requests sent in order against freshly seeded tables, with the answers they expect
+run "POST a balanced transaction"
+  POST /transactions {date: "2026-10-02", payee: "Mercadona",
+                      postings: [{account-id: 5, amount: 4250}, {account-id: 3, amount: -4250}]}
+    → 201 {id: 4, date: "2026-10-02", payee: "Mercadona"}
+
+run "POST to an account that doesn't exist"
+  POST /transactions {date: "2026-10-04", payee: "Ghost",
+                      postings: [{account-id: 42, amount: 500}, {account-id: 1, amount: -500}]}
+    → 422 "postings use missing or archived accounts"
+
+run "POST to an archived account"
+  PATCH /accounts/3 {archived: true} → 200
+  POST /transactions {date: "2026-10-05", payee: "Old habits",
+                      postings: [{account-id: 3, amount: 900}, {account-id: 1, amount: -900}]}
+    → 422 "postings use missing or archived accounts"
+
+run "POST, then GET it back"
+  POST /transactions {date: "2026-10-02", payee: "Mercadona",
+                      postings: [{account-id: 5, amount: 4250}, {account-id: 3, amount: -4250}]} → 201
+  GET /transactions/4
+    → 200 {id: 4, date: "2026-10-02", payee: "Mercadona",
+           lines: [{id: 7, tx-id: 4, account-id: 5, amount: 4250, date: "2026-10-02"},
+                   {id: 8, tx-id: 4, account-id: 3, amount: -4250, date: "2026-10-02"}]}
+
+run "GET a stored transaction"
+  GET /transactions/2
+    → 200 {id: 2, date: "2026-09-25", payee: "Acme Payroll",
+           lines: [{id: 3, tx-id: 2, account-id: 1, amount: 310000, date: "2026-09-25"},
+                   {id: 4, tx-id: 2, account-id: 4, amount: -310000, date: "2026-09-25"}]}
+
+run "GET one that doesn't exist"
+  GET /transactions/99 → 404 "no such transaction"
+
+run "POST postings that don't balance"
+  POST /transactions {date: "2026-10-03", payee: "Typo",
+                      postings: [{account-id: 5, amount: 1000}, {account-id: 1, amount: -999}]}
+    → 422 "postings must balance; these sum to 1"

@@ -48,6 +48,15 @@ pub fn report(src: &str) -> String {
             out.push(format!("sig {n} : {} → {res}{}", c.input, if c.guard { "   (guarded)" } else { "" }));
         }
     }
+    for r in &p.runs {
+        let o = crate::runs::run(&p, r);
+        out.push(format!("run \"{}\" {}", r.name, o.verdict.name()));
+        out.extend(o.said.iter().map(|l| format!("  > {l}")));
+        if o.verdict == crate::runs::Verdict::Fail {
+            out.extend(o.want.iter().map(|l| format!("  want {l}")));
+        }
+        out.extend(o.detail.iter().map(|d| format!("  why {d}")));
+    }
     out.push(String::new());
     out.join("\n")
 }

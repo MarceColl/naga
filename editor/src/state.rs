@@ -2,6 +2,7 @@
 //! event and returns the next state; the program text inside the analysis is the only data,
 //! and undo is a stack of earlier texts.
 use crate::analysis::{Analysis, Parent, Range, Step};
+use crate::debug::{self, Debug, Move};
 use crate::ops;
 use crate::view::Target;
 use naga::value::Name;
@@ -45,6 +46,7 @@ pub enum Key {
     Backspace,
     Char(char),
     Undo,
+    Home,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,6 +82,7 @@ pub struct Data {
 pub struct State {
     pub an: Rc<Analysis>,
     pub data: Option<Data>,
+    pub debug: Option<Debug>,
     pub undo: Vec<String>,
     pub sel: Option<Sel>,
     /// Where a shift-extended selection started.
@@ -102,6 +105,7 @@ impl State {
         State {
             an: Rc::new(Analysis::new(text)),
             data: None,
+            debug: None,
             undo: vec![],
             sel: None,
             anchor: None,
@@ -215,9 +219,53 @@ fn data(st: State, d: Data, ev: Event) -> State {
     State { data: Some(d), ..st }
 }
 
+/// Records run `i` and starts stepping it, keeping the breakpoints.
+fn start_debug(st: State, i: usize) -> State {
+    let bps = st.debug.as_ref().map(|d| d.bps.clone()).unwrap_or_default();
+    match debug::record(&st.an, i, bps) {
+        Ok(d) => State { debug: Some(d), sel: None, hover: None, data: None, ..st },
+        Err(e) => st.say(e, Tone::No),
+    }
+}
+
+fn debugging(st: State, mut d: Debug, ev: Event) -> State {
+    let mv = match ev {
+        Event::Key(Key::Escape, _) => return State { debug: None, ..st },
+        Event::Key(Key::Char(c), _) if c.is_ascii_digit() && c != '0' => return start_debug(st, c as usize - '1' as usize),
+        Event::Key(Key::Right, _) => Move::Into,
+        Event::Key(Key::Left, _) => Move::Back,
+        Event::Key(Key::Down, _) => Move::Over,
+        Event::Key(Key::Up, _) => Move::Out,
+        Event::Key(Key::Enter, _) => Move::Continue,
+        Event::Key(Key::Home, _) => Move::Restart,
+        Event::Press(Some(t), _) => {
+            let line = match t {
+                Target::Step(id) => st.an.step(id).map(|s| s.range.pos.line),
+                Target::Def(_, l) => Some(l),
+                _ => None,
+            };
+            if let Some(l) = line {
+                match d.bps.iter().position(|&b| b == l) {
+                    Some(i) => drop(d.bps.remove(i)),
+                    None => d.bps.push(l),
+                }
+            }
+            return State { debug: Some(d), ..st };
+        }
+        _ => return st,
+    };
+    d.at = d.go(mv);
+    let line = d.current().map(|r| r.pos.line);
+    reveal_line(State { debug: Some(d), ..st }, line)
+}
+
 pub fn update(st: State, ev: Event) -> State {
     match (&st.mode, ev) {
         (_, Event::Viewport(rows, lines)) => State { rows, row_lines: Rc::new(lines), ..st },
+        (Mode::Idle, ev) if st.debug.is_some() && !matches!(ev, Event::Scroll(_)) => {
+            let d = st.debug.clone().unwrap();
+            debugging(st, d, ev)
+        }
         (Mode::Idle, ev) if st.data.is_some() && !matches!(ev, Event::Scroll(_)) => {
             let d = st.data.clone().unwrap();
             data(st, d, ev)
@@ -347,7 +395,14 @@ fn run(st: State, raw: &str) -> State {
                 None => st.say("this program has no tables", Tone::No),
             }
         }
-        "rework" | "debug" | "run" => st.say(format!("{op} isn’t built yet"), Tone::No),
+        "debug" | "run" => {
+            let i = match arg.parse::<usize>() {
+                Ok(n) => n.wrapping_sub(1),
+                Err(_) => an.runs.iter().position(|r| r.verdict != naga::runs::Verdict::Pass).unwrap_or(0),
+            };
+            start_debug(st, i)
+        }
+        "rework" => st.say(format!("{op} isn’t built yet"), Tone::No),
         _ => st.say(format!("{raw} isn’t an operation — try {}", OPS.join(" · ")), Tone::No),
     }
 }
@@ -414,6 +469,10 @@ fn reveal(st: State) -> State {
         Some(Sel::Def(_, l)) => Some(*l),
         None => None,
     };
+    reveal_line(st, line)
+}
+
+fn reveal_line(st: State, line: Option<usize>) -> State {
     let Some(row) = line.and_then(|l| st.row_lines.iter().position(|&x| x == l)) else { return st };
     let (top, rows) = (st.scroll.floor() as usize, st.rows.max(1));
     let scroll = match row {
@@ -545,6 +604,28 @@ mod tests {
         assert_eq!(st.data, Some(Data { table: "us".into(), run: Some(1) }));
         let st = keys(st, &[(Key::Left, false), (Key::Left, false), (Key::Escape, false)]);
         assert_eq!(st.data, None);
+    }
+
+    #[test]
+    fn the_debugger_steps_over_into_and_to_breakpoints() {
+        let src = "route GET /x = w\nw = a b +{status: 200, json: 1}\na = +{n: 1} +{m: 2}\nb = +{k: 3}\nrun \"x\"\n  GET /x → 200\n";
+        let st = update(typed(State::new(src), "debug 1"), Event::Key(Key::Enter, false));
+        let line = |st: &State| st.debug.as_ref().and_then(|d| d.current()).map(|r| (r.pos.line, r.pos.col));
+        let st = keys(st, &[(Key::Right, false)]);
+        assert_eq!(line(&st), Some((2, 4)), "into w: its first step, a");
+        let st = keys(st, &[(Key::Down, false)]);
+        assert_eq!(line(&st), Some((2, 6)), "over a: b");
+        let st = keys(st, &[(Key::Left, false)]);
+        assert_eq!(line(&st), Some((3, 12)), "back: a's last step");
+        let st = keys(st, &[(Key::Home, false), (Key::Right, false), (Key::Right, false)]);
+        assert_eq!(line(&st), Some((3, 4)), "from the start, into a");
+        let b = st.an.steps.iter().find(|s| s.range.pos == naga::ast::Pos { line: 4, col: 4 }).unwrap().id;
+        let st = update(st, Event::Press(Some(Target::Step(b)), false));
+        let st = keys(st, &[(Key::Home, false), (Key::Enter, false)]);
+        assert_eq!(line(&st), Some((4, 4)), "continue stops at the breakpoint in b");
+        let st = keys(st, &[(Key::Enter, false)]);
+        assert_eq!(st.debug.as_ref().map(|d| d.now().st.status), Some(naga::machine::Status::Done));
+        assert!(keys(st, &[(Key::Escape, false)]).debug.is_none());
     }
 
     #[test]

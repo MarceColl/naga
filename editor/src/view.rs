@@ -4,7 +4,9 @@ use crate::analysis::{Analysis, Range, Step};
 use crate::state::{Data, Edit, Mode, OPS, Sel, State, Tone};
 use naga::ast::ColType;
 use naga::runs::Verdict;
-use naga::value::{Value, eqv};
+use crate::debug::Debug;
+use naga::machine::{self, Frame as MFrame, Status};
+use naga::value::{Value, eqv, show_rec};
 use naga::check::Point;
 use naga::value::Name;
 
@@ -229,6 +231,8 @@ fn shown(c: char, class: Class) -> char {
 // ---------- the code ----------
 struct Marks {
     sel: Option<Range>,
+    /// The debugger's step.
+    cur: Option<Range>,
     hover: Option<Range>,
     err_steps: Vec<usize>,
     err_lines: Vec<usize>,
@@ -262,14 +266,15 @@ pub fn view(st: &State) -> Frame {
         Some(Target::Step(id)) => an.step(*id).map(|s| s.range),
         _ => None,
     };
-    let marks = Marks { sel, hover, err_steps, err_lines };
+    let cur = st.debug.as_ref().and_then(Debug::current);
+    let marks = Marks { sel, cur, hover, err_steps, err_lines };
     let mut code = vec![];
     let mut folding = false;
     for (li, chars) in an.lines.iter().enumerate() {
         let ln = li + 1;
         let text: String = chars.iter().collect();
         if text.starts_with("seed") && text[4..].starts_with(char::is_whitespace) {
-            code.push(seed_line(an, li));
+            code.push(gutter(st, ln, seed_line(an, li)));
             folding = true;
             continue;
         }
@@ -286,13 +291,121 @@ pub fn view(st: &State) -> Frame {
             _ => {
                 let mut line = Line { src: ln, ..Line::default() };
                 code_spans(st, &marks, ln, 0, chars.len(), &mut line);
-                code.push(line);
+                if let Some(d) = st.debug.as_ref().filter(|_| cur.is_some_and(|c| c.pos.line == ln)) {
+                    let (ghost, bad) = ghost(&d.now().st);
+                    line.push(&format!("   ‹ {ghost}"), Style::plain(if bad { ERR } else { FAINT }), None);
+                }
+                code.push(gutter(st, ln, line));
             }
         }
     }
     let mut f = Frame { code, ..Frame::default() };
-    bar(st, &mut f);
+    match &st.debug {
+        Some(d) => debug_bar(st, d, &mut f),
+        None => bar(st, &mut f),
+    }
     f
+}
+
+/// While debugging, every line starts with a breakpoint ● or the current step's ▸.
+fn gutter(st: &State, ln: usize, line: Line) -> Line {
+    let Some(d) = &st.debug else { return line };
+    let (mark, fg) = match (d.bps.contains(&ln), d.current().is_some_and(|c| c.pos.line == ln)) {
+        (true, _) => ("• ", ERR),
+        (false, true) => ("› ", DEF),
+        _ => ("  ", FAINT),
+    };
+    let mut out = Line { src: line.src, ..Line::default() };
+    out.push(mark, Style::plain(fg), None);
+    out.spans.extend(line.spans);
+    out
+}
+
+/// The record beside the current step, or why the run stopped.
+fn ghost(s: &machine::State) -> (String, bool) {
+    let (text, bad) = match s.status {
+        Status::Error => (format!("stops: {}", s.error.as_ref().map_or("", |e| &e.msg)), true),
+        Status::Hole => ("stopped at a hole".to_string(), true),
+        _ => (show_rec(&s.subj), false),
+    };
+    let short: String = text.chars().take(108).collect();
+    (if short.len() < text.len() { short + "…" } else { text }, bad)
+}
+
+/// The words and focuses the run is inside, outermost first.
+fn stack(an: &Analysis, s: &machine::State) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for f in &s.k {
+        let name = match f {
+            MFrame::Seq { body, i, .. } => {
+                let stmt = body.get(*i).or_else(|| i.checked_sub(1).and_then(|j| body.get(j)));
+                let Some(w) = stmt.and_then(|x| an.steps.iter().find(|s| s.range.pos == x.pos)).map(|s| s.word.to_string()) else { continue };
+                w
+            }
+            MFrame::Focus { field, .. } => format!("@{field}"),
+            MFrame::Map { field, results, .. } => format!("@{field}[{}]", results.len()),
+            MFrame::Par { results, branches, .. } => format!("‖ {}/{}", results.len() + 1, branches.len()),
+        };
+        if out.last() != Some(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+fn debug_bar(st: &State, d: &Debug, f: &mut Frame) {
+    let an = &st.an;
+    let now = d.now();
+    let s = &now.st;
+    let (k, fg) = (Style::plain(DIM), Style::plain(FG));
+    let mut first = Line::default();
+    first.push(&format!("RUN {} ", d.run + 1), Style::bold(DEF, 800), None);
+    first.push(&upper(an.program.runs.get(d.run).map_or("", |r| r.name.as_str())), fg, None);
+    first.push(&format!(" · STEP {}/{} · ", d.at, d.hist.len() - 1), k, None);
+    first.push(&upper(d.reqs.get(now.req).map_or("", String::as_str)), fg, None);
+    first.push(" · ", k, None);
+    match s.status {
+        Status::Done => first.push("FINISHED", Style::bold(CALL, 800), None),
+        Status::Error => first.push(&upper(&format!("stops: {}", s.error.as_ref().map_or("", |e| &e.msg))), Style::plain(ERR), None),
+        Status::Hole => first.push(" STOPPED AT A HOLE ", Style { fg: HOLE_FG, bg: Some(HOLE), weight: 500, err: false }, None),
+        Status::Ready => {
+            let words = stack(an, s);
+            for (i, w) in words.iter().enumerate() {
+                if i > 0 {
+                    first.push(" › ", k, None);
+                }
+                first.push(&upper(w), if i + 1 == words.len() { Style::bold(CALL, 800) } else { fg }, None);
+            }
+        }
+    }
+    // the record, its changes marked when the step stayed in the same place
+    let prev = d.at.checked_sub(1).map(|i| &d.hist[i]).filter(|p| p.req == now.req && stack(an, &p.st) == stack(an, s)).map(|p| p.st.subj.clone());
+    let mut rec = Line::default();
+    rec.push("{", fg, None);
+    for (i, (key, v)) in s.subj.iter().enumerate() {
+        if i > 0 {
+            rec.push(", ", k, None);
+        }
+        let was = prev.as_ref().map(|p| p.get(key));
+        let (mark, c) = match was {
+            Some(None) => ("+", CALL),
+            Some(Some(w)) if !eqv(w, v) => ("~", OP),
+            _ => ("", FG),
+        };
+        rec.push(&format!("{mark}{}", upper(key)), Style::plain(c), None);
+        rec.push(": ", k, None);
+        rec.push(&v.show(), fg, None);
+    }
+    for key in prev.iter().flat_map(|p| p.keys()).filter(|key| !s.subj.contains_key(*key)) {
+        rec.push(&format!(", −{}", upper(key)), Style::plain(ERR), None);
+    }
+    rec.push("}", fg, None);
+    f.shape = vec![first, rec];
+    let said = &d.log[..s.out_len.min(d.log.len())];
+    let last = said.last().map_or("nothing printed yet".to_string(), |l| format!("printed {l}"));
+    f.msg.push(&last, fg, None);
+    f.msg.push("  → INTO · ↓ OVER · ↑ OUT · ← BACK · ENTER CONTINUE · HOME RESTART · CLICK A STEP FOR A BREAKPOINT · 1–9 RUN · ESC CODE", k, None);
+    stat(st, f);
 }
 
 /// A seed is data: one folded line, a click away from the table's rows.
@@ -375,6 +488,9 @@ fn code_spans(st: &State, m: &Marks, ln: usize, a: usize, b: usize, line: &mut L
             style = Style { fg: HOLE_FG, bg: Some(HOLE), weight: 700, err: false };
             target = hole.map(|h| Target::Step(h.id));
             c = ch.to_uppercase().next().unwrap_or(ch);
+        }
+        if m.cur.is_some_and(|r| r.contains(ln, i)) && !is_hole {
+            style = Style { fg: BG, bg: Some(DEF), ..style };
         }
         let selected = m.sel.is_some_and(|r| r.contains(ln, i) && ch != ' ')
             || (in_def && matches!(&st.sel, Some(Sel::Def(n, l)) if Some(n) == def.map(|d| &d.name) && *l == ln));
@@ -467,7 +583,7 @@ fn bar(st: &State, f: &mut Frame) {
         (Mode::Cmd(c), _) => {
             let first = c.split_whitespace().next().unwrap_or("").to_lowercase();
             let sug: Vec<&str> = OPS.iter().copied().filter(|o| o.starts_with(&first)).collect();
-            f.msg.push(&format!("▸ {}▌", upper(c)), Style::plain(FG), None);
+            f.msg.push(&format!("› {}▌", upper(c)), Style::plain(FG), None);
             f.msg.push(&format!("  {}", upper(&sug.join(" · "))), dim, None);
         }
         (_, Some((text, tone))) => {
@@ -539,7 +655,7 @@ fn shape(an: &Analysis, t: &Target) -> Vec<Line> {
                 first.push(&upper(&txt), fg, None);
                 second.push("HERE ", k, None);
                 second.push(&or_dash(before), fg, None);
-                second.push(" ▸ ", k, None);
+                second.push(" › ", k, None);
                 second.push(&or_dash(after), fg, None);
             } else {
                 first.push("BEFORE ", k, None);

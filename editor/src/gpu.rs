@@ -65,16 +65,6 @@ pub struct Layout {
     pub bar_max: f32,
 }
 
-impl Layout {
-    /// The code line and column under a point, scrolled by `scroll` lines.
-    pub fn cell_at(&self, x: f32, y: f32, scroll: f32) -> Option<(usize, usize)> {
-        if y >= self.bar_top || x < self.pad {
-            return None;
-        }
-        let row = ((y - self.top) / self.code_line + scroll).floor();
-        (row >= 0.0).then(|| (row as usize, ((x - self.pad) / self.cell) as usize))
-    }
-}
 
 pub struct Gpu {
     device: wgpu::Device,
@@ -94,6 +84,12 @@ pub struct Gpu {
     stat: Buffer,
     pub layout: Layout,
     out: Out,
+    /// Where the code went in the last frame: the first row shown, the top of row 0, and
+    /// each shown row's character edges (`n + 1` of them), as laid out — fallback glyphs
+    /// need not be one cell wide.
+    first: usize,
+    code_top: f32,
+    edges: Vec<Vec<f32>>,
 }
 
 /// Where frames go: a window's surface, or a texture that can be saved as a PNG.
@@ -204,6 +200,9 @@ impl Gpu {
             stat,
             layout: Layout { scale: 1.0, width: 1.0, height: 1.0, code_size: 14.0, code_line: 25.0, cell: 9.0, bar_size: 12.0, bar_line: 18.0, pad: 16.0, top: 28.0, bar_top: 0.0, bar_max: 0.0 },
             out,
+            first: 0,
+            code_top: 0.0,
+            edges: vec![],
         };
         gpu.resize(size, scale);
         gpu
@@ -284,6 +283,13 @@ impl Gpu {
         let shown: Vec<&Line> = f.code.iter().skip(first).take(rows).collect();
         set_lines(&mut self.fonts, &mut self.code, &shown, Metrics::new(l.code_size, l.code_line), code_attrs, None, Wrap::None);
         let code_top = l.top - scroll.fract() * l.code_line;
+        self.edges = shown.iter().map(|line| grid(line, l)).collect();
+        for run in self.code.layout_runs() {
+            if let Some(e) = self.edges.get_mut(run.line_i) {
+                *e = edges(run.text, run.glyphs, run.line_w).iter().map(|x| l.pad + x).collect();
+            }
+        }
+        (self.first, self.code_top) = (first, code_top);
 
         let mut rects: Vec<Vertex> = vec![];
         let mut rect = |x: f32, y: f32, w: f32, h: f32, c: Color| {
@@ -295,19 +301,20 @@ impl Gpu {
         let glyph_h = l.code_size * 1.35;
         for (r, line) in shown.iter().enumerate() {
             let y = code_top + r as f32 * l.code_line;
-            let mut col = 0.0;
+            let e = &self.edges[r];
+            let mut col = 0;
             for s in &line.spans {
-                let n = s.text.chars().count() as f32;
-                let x = l.pad + col * l.cell;
+                let n = s.text.chars().count();
+                let (x, x1) = (e[col.min(e.len() - 1)], e[(col + n).min(e.len() - 1)]);
                 if let Some(bg) = s.style.bg {
-                    rect(x, y + (l.code_line - glyph_h) / 2.0, n * l.cell, glyph_h, bg);
+                    rect(x, y + (l.code_line - glyph_h) / 2.0, x1 - x, glyph_h, bg);
                 }
                 if s.style.err {
                     // a wave: short dashes stepping up and down
                     let base = y + (l.code_line + glyph_h) / 2.0;
                     let step = 2.0 * l.scale;
                     let mut i = 0.0;
-                    while i < n * l.cell {
+                    while i < x1 - x {
                         let up = ((i / step) as i32 % 4) as f32;
                         let dy = if up < 2.0 { up } else { 4.0 - up } * l.scale;
                         rect(x + i, base - dy, step, 2.0 * l.scale, palette::ERR);
@@ -450,8 +457,42 @@ fn set_lines(fonts: &mut FontSystem, buf: &mut Buffer, lines: &[&Line], m: Metri
     buf.shape_until_scroll(fonts, false);
 }
 
-/// What sits under a point of the window.
-pub fn target_at(f: &Frame, l: &Layout, x: f32, y: f32, scroll: f32) -> Option<Target> {
-    let (row, col) = l.cell_at(x, y, scroll)?;
-    f.code.get(row)?.target_at(col).cloned()
+impl Gpu {
+    /// What sits under a point of the window, in the last frame drawn.
+    pub fn target_at(&self, f: &Frame, x: f32, y: f32) -> Option<Target> {
+        if y >= self.layout.bar_top || y < self.code_top {
+            return None;
+        }
+        let r = ((y - self.code_top) / self.layout.code_line) as usize;
+        let e = self.edges.get(r)?;
+        let col = e.windows(2).position(|w| x >= w[0] && x < w[1])?;
+        f.code.get(self.first + r)?.target_at(col).cloned()
+    }
+}
+
+/// Character edges on an even grid, for rows the layout hasn't placed.
+fn grid(line: &Line, l: Layout) -> Vec<f32> {
+    let n: usize = line.spans.iter().map(|s| s.text.chars().count()).sum();
+    (0..=n).map(|i| l.pad + i as f32 * l.cell).collect()
+}
+
+/// The left edge of every character of `text`, then its end, from the shaped glyphs. A glyph
+/// covering several characters (a ligature) shares its width among them.
+fn edges(text: &str, glyphs: &[glyphon::LayoutGlyph], width: f32) -> Vec<f32> {
+    let starts: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
+    let mut out = vec![f32::NAN; starts.len() + 1];
+    for g in glyphs {
+        let chars: Vec<usize> = (0..starts.len()).filter(|&c| starts[c] >= g.start && starts[c] < g.end).collect();
+        for (k, &c) in chars.iter().enumerate() {
+            out[c] = g.x + g.w * k as f32 / chars.len() as f32;
+        }
+    }
+    out[starts.len()] = width;
+    // a character no glyph claimed starts where the next one does
+    for i in (0..starts.len()).rev() {
+        if out[i].is_nan() {
+            out[i] = out[i + 1];
+        }
+    }
+    out
 }

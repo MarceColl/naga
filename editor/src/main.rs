@@ -1,5 +1,6 @@
 //! `naga-edit file.nag`: the hole editor, drawn on the GPU.
 mod analysis;
+mod debug;
 mod gpu;
 mod ops;
 mod state;
@@ -42,8 +43,7 @@ impl App {
         }
     }
     fn target(&self) -> Option<view::Target> {
-        let (g, st) = (self.gpu.as_ref()?, self.state.as_ref()?);
-        gpu::target_at(&self.frame, &g.layout, self.cursor.0, self.cursor.1, st.scroll)
+        self.gpu.as_ref()?.target_at(&self.frame, self.cursor.0, self.cursor.1)
     }
 }
 
@@ -108,6 +108,7 @@ impl ApplicationHandler for App {
                     WKey::Named(NamedKey::Escape) => Key::Escape,
                     WKey::Named(NamedKey::Enter) => Key::Enter,
                     WKey::Named(NamedKey::Backspace) => Key::Backspace,
+                    WKey::Named(NamedKey::Home) => Key::Home,
                     WKey::Named(NamedKey::Space) if !command => Key::Char(' '),
                     WKey::Character(c) if command && c.eq_ignore_ascii_case("z") => Key::Undo,
                     WKey::Character(c) if !command => match event.text.as_deref().and_then(|t| t.chars().next()) {
@@ -136,6 +137,7 @@ fn key(name: &str) -> Option<(Key, bool)> {
         "enter" => Key::Enter,
         "backspace" => Key::Backspace,
         "undo" => Key::Undo,
+        "home" => Key::Home,
         _ => return None,
     };
     Some((k, shift))

@@ -145,7 +145,7 @@ pub fn handle(p: &Program, store: &mut Store, req: &Req) -> Handled {
 }
 
 /// Path params and query fields at the top level, the body in `body`, the time in `time`.
-fn request(r: &Route, job: &Req) -> Result<Rec, String> {
+pub fn request(r: &Route, job: &Req) -> Result<Rec, String> {
     let raw = |pairs: &Pairs, d: &FieldDecl| pairs.iter().find(|(k, _)| **k == *d.name).map(|(_, v)| (d.name.clone(), text(d, v)));
     let given: Rec = r.path_params().filter_map(|d| raw(&job.path, d)).chain(r.query.iter().filter_map(|d| raw(&job.query, d))).collect();
     let mut rec = record(r.params(), &given, "")?;

@@ -1,0 +1,16 @@
+[package]
+name = "naga-editor"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "naga-edit"
+path = "src/main.rs"
+
+[dependencies]
+glyphon = "0.12"
+naga = { path = ".." }
+png = "0.18"
+pollster = "0.4"
+wgpu = "30"
+winit = "0.30"

@@ -5,7 +5,7 @@ whose engine is `spec/lang.js`): one screen of colorForth-style code, steps as t
 selection, typed keyword operations, holes filled by hand or by Claude, runs checked on every
 edit, a debugger and a data view.
 
-`naga edit file.nag` opens a file and writes it on every successful edit.
+`naga-edit file.nag` (its own binary, so the GPU stack stays out of `naga`) opens a file and writes it on every successful edit. `--shot out.png` draws one frame offscreen after replaying `--keys`, `--click` and `--scroll`.
 
 ## Runs: route requests declared in the program
 

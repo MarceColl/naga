@@ -50,9 +50,20 @@ pub struct Live {
 
 impl Live {
     /// The program at `db`, its tables made to fit it.
+    /// Serves `p` on the tables in `db`, after applying what loses nothing.
     pub fn open(p: Arc<Program>, db: &std::path::Path) -> Result<(Arc<Live>, Migration), String> {
         let (store, m) = open(&p, db)?;
-        Ok((Arc::new(Live { program: RwLock::new(p), pages: Default::default(), db: db.into(), idle: Mutex::new(vec![store]) }), m))
+        Ok((Live::on(p, db, store), m))
+    }
+
+    /// Serves `p` on the tables in `db` as they are: changing them is up to the editor.
+    pub fn connect(p: Arc<Program>, db: &std::path::Path) -> Result<Arc<Live>, String> {
+        let store = Store::connect(db).map_err(|e| e.msg)?;
+        Ok(Live::on(p, db, store))
+    }
+
+    fn on(p: Arc<Program>, db: &std::path::Path, store: Store) -> Arc<Live> {
+        Arc::new(Live { program: RwLock::new(p), pages: Default::default(), db: db.into(), idle: Mutex::new(vec![store]) })
     }
 
     pub fn program(&self) -> Arc<Program> {

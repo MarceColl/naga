@@ -57,6 +57,10 @@ pub enum Key {
 pub enum Effect {
     /// Drop the table, then create and seed it again.
     Reset(Name),
+    /// Work out what the live tables need to fit the image, and show it.
+    Plan,
+    /// Make the changes of this plan, if it is still the plan.
+    Migrate(Rc<crate::store::Plan>),
     Quit,
 }
 
@@ -167,8 +171,10 @@ pub struct State {
     pub live: Option<(u16, Option<String>)>,
     /// The live database's tables, as of the last look (kept fresh while the data view is open).
     pub live_tables: Option<Rc<crate::runs::Tables>>,
-    /// Table changes the live database can't take without losing data.
-    pub pending: Vec<String>,
+    /// What the live tables need to fit the image: nothing changes until :migrate.
+    pub plan: Rc<crate::store::Plan>,
+    /// The plan is on screen, waiting for enter.
+    pub migrating: bool,
     /// Something only the app can do, waiting to be done.
     pub effect: Option<Effect>,
     pub hover: Option<Target>,
@@ -182,7 +188,7 @@ pub struct State {
     pub row_lines: Rc<Vec<usize>>,
 }
 
-pub const OPS: [&str; 14] = ["extract name", "inline", "hole note", "rework", "drop", "swap", "rename name", "fix", "data", "debug 1–9", "reset table", "help", "w", "q"];
+pub const OPS: [&str; 15] = ["extract name", "inline", "hole note", "rework", "drop", "swap", "rename name", "fix", "data", "debug 1–9", "migrate", "reset table", "help", "w", "q"];
 
 impl State {
     pub fn new(text: &str) -> State {
@@ -208,7 +214,8 @@ impl State {
             ask: None,
             agents: 0,
             live: None,
-            pending: vec![],
+            plan: Rc::default(),
+            migrating: false,
             live_tables: None,
             effect: None,
             hover: None,
@@ -312,6 +319,9 @@ pub fn update(st: State, ev: Event) -> State {
         Event::Ran(_) => st,
         Event::Viewport(rows, lines) => State { rows, row_lines: Rc::new(lines), ..st },
         Event::Scroll(dy) => State { scroll: (st.scroll + dy).clamp(0.0, st.row_lines.len() as f32), ..st },
+        Event::Key(Key::Enter, _) if st.migrating => State { effect: Some(Effect::Migrate(st.plan.clone())), ..st },
+        Event::Key(Key::Escape | Key::Char('q'), _) | Event::Press(..) if st.migrating => State { migrating: false, ..st },
+        Event::Key(..) | Event::Hover(..) if st.migrating => st,
         Event::Key(k, _) if st.help.is_some() => {
             let at = st.help.unwrap_or(0);
             let last = crate::editor::help::TEXT.lines().count().saturating_sub(st.rows.max(1) / 2);
@@ -536,6 +546,8 @@ pub fn run(st: State, raw: &str) -> State {
     let need = |what: &str| format!("put the cursor on {what}, or select some");
     match op.as_str() {
         "help" | "h" => State { help: Some(0), ..st },
+        "migrate" if st.live.is_none() => st.say("migrate works on the live database — naga start", Tone::No),
+        "migrate" => State { effect: Some(Effect::Plan), ..st },
         "fix" => {
             // the fix an error on this line proposes: a clause, put before the word's first one,
             // since the first clause that matches is the one that runs
@@ -733,6 +745,25 @@ pub mod tests {
         let st = keys(st, "<cr>");
         assert_eq!(st.debug.as_ref().map(|d| d.now().st.status), Some(crate::machine::Status::Done));
         assert!(keys(st, "<esc>").debug.is_none());
+    }
+
+    #[test]
+    fn migrate_shows_the_plan_and_enter_asks_for_exactly_that_plan() {
+        use crate::store::{Change, Plan};
+        let st = keys(State::new(SRC), ":migrate<cr>");
+        assert_eq!((st.effect.clone(), st.msg.as_ref().map(|m| m.1)), (None, Some(Tone::No)), "only on the live database");
+        let st = keys(State { live: Some((0, None)), ..State::new(SRC) }, ":migrate<cr>");
+        assert_eq!(st.effect, Some(Effect::Plan));
+        // the app answers with the plan
+        let change = Change { what: "drop notes.title".into(), sql: vec![], loses: Some("the value in 2 rows".into()), seed: None };
+        let plan = Rc::new(Plan { changes: vec![change], blocked: vec!["notes.rank is new and required".into()] });
+        let st = State { effect: None, plan: plan.clone(), migrating: true, ..st };
+        let text = crate::editor::view::view(&st).code.iter().map(|l| l.spans.iter().map(|s| s.text.as_str()).collect::<String>()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("drop notes.title") && text.contains("loses the value in 2 rows") && text.contains("notes.rank is new and required"), "{text}");
+        let st = keys(st, "jx");
+        assert_eq!(st.an.text, SRC, "keys don't reach the code while the plan is up");
+        assert_eq!(keys(st.clone(), "<cr>").effect, Some(Effect::Migrate(plan)));
+        assert!(!keys(st, "<esc>").migrating);
     }
 
     #[test]

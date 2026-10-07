@@ -62,16 +62,38 @@ impl App {
         }
         if let Some(live) = &self.live {
             let p = next.image.program.clone();
-            if let Some(state::Effect::Reset(t)) = next.effect.clone() {
-                next.effect = None;
-                next.msg = Some(match live.with_store(|s| s.reset(&p, &t).and_then(|_| s.migrate(&p))) {
-                    Ok(Ok(m)) => {
-                        next.pending = m.pending;
-                        (format!("reset {t}: recreated and seeded"), state::Tone::Ok)
+            let plan = || live.with_store(|s| s.plan(&p)).and_then(|r| r.map_err(|e| e.msg));
+            match next.effect.clone() {
+                Some(state::Effect::Reset(t)) => {
+                    next.msg = Some(match live.with_store(|s| s.reset(&p, &t)) {
+                        Ok(Ok(())) => (format!("reset {t}: recreated and seeded"), state::Tone::Ok),
+                        Ok(Err(e)) => (format!("reset {t}: {}", e.msg), state::Tone::No),
+                        Err(e) => (format!("reset {t}: {e}"), state::Tone::No),
+                    });
+                    next.plan = Rc::new(plan().unwrap_or_default());
+                }
+                Some(state::Effect::Plan) => match plan() {
+                    Ok(pl) => (next.plan, next.migrating) = (Rc::new(pl), true),
+                    Err(e) => next.msg = Some((format!("live database: {e}"), state::Tone::No)),
+                },
+                // only what was shown is done: if the tables moved since, show them again
+                Some(state::Effect::Migrate(shown)) => match plan() {
+                    Ok(pl) if pl != *shown => (next.plan, next.msg) = (Rc::new(pl), Some(("the tables changed since — this is what it takes now".into(), state::Tone::No))),
+                    Ok(pl) => {
+                        let changes: Vec<&crate::store::Change> = pl.changes.iter().collect();
+                        next.msg = Some(match live.with_store(|s| s.apply(&p, &changes)) {
+                            Ok(Ok(())) => (format!("migrated · {}", pl.changes.iter().map(|c| c.what.as_str()).collect::<Vec<_>>().join(" · ")), state::Tone::Ok),
+                            Ok(Err(e)) => (format!("migrate: {} — nothing changed", e.msg), state::Tone::No),
+                            Err(e) => (format!("migrate: {e}"), state::Tone::No),
+                        });
+                        (next.plan, next.migrating) = (Rc::new(plan().unwrap_or_default()), false);
                     }
-                    Ok(Err(e)) => (format!("reset {t}: {}", e.msg), state::Tone::No),
-                    Err(e) => (format!("reset {t}: {e}"), state::Tone::No),
-                });
+                    Err(e) => next.msg = Some((format!("live database: {e}"), state::Tone::No)),
+                },
+                _ => {}
+            }
+            if matches!(next.effect, Some(state::Effect::Reset(_) | state::Effect::Plan | state::Effect::Migrate(_))) {
+                next.effect = None;
             }
             // while the data view is open it shows the live tables as they are now
             if next.data.is_some() {
@@ -106,14 +128,9 @@ impl App {
         let Some(mut st) = self.state.take() else { return };
         let p = st.image.program.clone();
         if let Some(live) = &self.live {
-            match live.with_store(|s| s.migrate(&p)).and_then(|m| m.map_err(|e| e.msg)) {
-                Ok(m) => {
-                    if !m.applied.is_empty() {
-                        st.msg = Some((format!("live · {}", m.applied.join(" · ")), state::Tone::Ok));
-                    }
-                    st.pending = m.pending;
-                }
-                Err(e) => st.msg = Some((format!("live database: {e}"), state::Tone::No)),
+            // the tables change only on :migrate; until then, what it would take
+            if let Ok(Ok(plan)) = live.with_store(|s| s.plan(&p)) {
+                st.plan = Rc::new(plan);
             }
             live.publish(p.clone());
         }
@@ -347,8 +364,8 @@ pub fn start(path: &str, port: u16) -> Result<(), String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("naga: {path}: {e}"))?;
     let mut state = State::new(&text);
     let db = std::path::Path::new(path).with_extension("db");
-    let (live, m) = crate::serve::Live::open(state.image.program.clone(), &db)?;
-    state.pending = m.pending;
+    let live = crate::serve::Live::connect(state.image.program.clone(), &db)?;
+    state.plan = Rc::new(live.with_store(|s| s.plan(&state.image.program)).and_then(|r| r.map_err(|e| e.msg))?);
     let el = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
     let proxy = el.create_proxy();
     let listener = std::net::TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("naga: port {port}: {e}"))?;

@@ -19,29 +19,50 @@ fn titles(s: &mut Store, p: &naga::ast::Program) -> Vec<String> {
 }
 
 #[test]
-fn safe_changes_apply_and_keep_the_data() {
+fn serving_alone_applies_what_loses_nothing() {
     let path = db("safe");
     let v1 = program("table notes :: {title: Text}");
     let (mut s, m) = Store::open(&v1, &path).unwrap();
-    assert_eq!(m.applied, ["created notes"]);
+    assert_eq!(m.applied, ["create notes"]);
     s.insert(&v1.tables["notes"], &naga::value::Value::Rec(std::sync::Arc::new([("title".into(), naga::value::Value::Text("mine".into()))].into_iter().collect()))).unwrap();
 
     let v2 = program("table notes :: {title: Text, note: Text?}\ntable tags :: {name: Text}");
-    assert_eq!(s.migrate(&v2).unwrap(), Migration { applied: vec!["added notes.note".into(), "created tags".into()], pending: vec![] });
+    assert_eq!(s.migrate(&v2).unwrap(), Migration { applied: vec!["add notes.note: Text?".into(), "create tags".into()], pending: vec![] });
     assert_eq!(titles(&mut s, &v2), ["seeded", "mine"]);
 
-    let v3 = program("table notes :: {title: Text, note: Num?, rank: Int}");
-    let m = s.migrate(&v3).unwrap();
-    assert!(m.applied.is_empty());
-    assert_eq!(m.pending, ["notes.note was TEXT, is now REAL", "notes.rank is new and required"]);
-    let v4 = program("table notes :: {note: Text?}");
-    assert_eq!(s.migrate(&v4).unwrap().pending, ["notes.title is gone from the program"]);
+    let m = s.migrate(&program("table notes :: {title: Text, note: Num?, rank: Int}")).unwrap();
+    assert_eq!(m.applied, ["change notes.note to Num?"]);
+    assert_eq!(m.pending, ["notes.rank is new and required, and notes has 2 rows: make it Int? or :reset notes"]);
+    assert_eq!(s.migrate(&program("table notes :: {note: Num?}")).unwrap().pending, ["drop notes.title loses the value in 2 rows"]);
 
     let v5 = program("table notes :: {title: Text, note: Num?}");
-    assert_eq!(s.migrate(&v5).unwrap().pending, ["notes.note was TEXT, is now REAL"]);
     s.reset(&v5, "notes").unwrap();
     assert_eq!(s.migrate(&v5).unwrap(), Migration::default());
     assert_eq!(titles(&mut s, &v5), ["seeded"]);
+}
+
+#[test]
+fn a_plan_says_what_would_change_and_nothing_changes_until_it_is_applied() {
+    let path = db("plan");
+    let v1 = program("table notes :: {title: Text}\ntable tags :: {name: Text}");
+    let (mut s, _) = Store::open(&v1, &path).unwrap();
+    let whats = |p: &naga::store::Plan| p.changes.iter().map(|c| (c.what.clone(), c.loses.clone())).collect::<Vec<_>>();
+
+    let typed = program("table notes :: {title: Text, author: Text?}\ntable tags :: {name: Text}");
+    let plan = s.plan(&typed).unwrap();
+    assert_eq!(whats(&plan), [("add notes.author: Text?".to_string(), None)]);
+    assert_eq!(s.plan(&typed).unwrap(), plan, "planning changes nothing");
+    s.apply(&typed, &plan.changes.iter().collect::<Vec<_>>()).unwrap();
+    assert!(s.plan(&typed).unwrap().is_empty());
+
+    // dropping says what it loses; a table with no rows is made again
+    let v2 = program("table notes :: {author: Text?}\ntable tags :: {label: Text, rank: Int}");
+    assert_eq!(
+        whats(&s.plan(&v2).unwrap()),
+        [("drop notes.title".to_string(), Some("the value in 1 row".to_string())), ("rebuild tags (it has no rows)".to_string(), None)]
+    );
+    let v3 = program("table notes :: {title: Text, author: Text, n: Num?}\ntable tags :: {name: Text}");
+    assert_eq!(s.plan(&v3).unwrap().blocked, ["notes.author is now required, and it is empty in 1 row: :reset notes"]);
 }
 
 #[test]
@@ -51,7 +72,7 @@ fn reopening_migrates_too() {
     drop(Store::open(&v1, &path).unwrap());
     let v2 = program("table notes :: {title: Text, done: Bool?}");
     let (_, m) = Store::open(&v2, &path).unwrap();
-    assert_eq!(m.applied, ["added notes.done"]);
+    assert_eq!(m.applied, ["add notes.done: Bool?"]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]

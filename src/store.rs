@@ -238,6 +238,46 @@ pub struct Migration {
     pub pending: Vec<String>,
 }
 
+/// One change to the tables: what it is, the SQL, and what it loses, if anything.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Change {
+    pub what: String,
+    pub sql: Vec<String>,
+    pub loses: Option<String>,
+    /// A new table is seeded.
+    pub seed: Option<Name>,
+}
+
+impl Change {
+    fn new(what: String, sql: Vec<String>) -> Change {
+        Change { what, sql, loses: None, seed: None }
+    }
+}
+
+/// What it takes for the tables to fit the program, and what can't be done without a reset.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Plan {
+    pub changes: Vec<Change>,
+    pub blocked: Vec<String>,
+}
+
+impl Plan {
+    pub fn is_empty(&self) -> bool {
+        self.changes.is_empty() && self.blocked.is_empty()
+    }
+}
+
+fn rows_(n: i64) -> String {
+    if n == 1 { "1 row".into() } else { format!("{n} rows") }
+}
+
+fn create_sql(t: &Table) -> String {
+    let cols: Vec<String> = std::iter::once("\"id\" INTEGER PRIMARY KEY".to_string())
+        .chain(t.cols.iter().map(|c| format!("{} {}{}", qi(&c.name), c.ty.sql(), if c.opt { "" } else { " NOT NULL" })))
+        .collect();
+    format!("CREATE TABLE {} ({})", qi(&t.name), cols.join(", "))
+}
+
 pub struct Store {
     db: Connection,
     /// Every statement run, with the step it ran at (-1 before the run starts).
@@ -276,10 +316,7 @@ impl Store {
     }
 
     fn create(&mut self, t: &Table) -> Result<(), RunError> {
-        let cols: Vec<String> = std::iter::once("\"id\" INTEGER PRIMARY KEY".to_string())
-            .chain(t.cols.iter().map(|c| format!("{} {}{}", qi(&c.name), c.ty.sql(), if c.opt { "" } else { " NOT NULL" })))
-            .collect();
-        self.q(&format!("CREATE TABLE {} ({})", qi(&t.name), cols.join(", ")), vec![], true, false)?;
+        self.q(&create_sql(t), vec![], true, false)?;
         Ok(())
     }
 
@@ -291,35 +328,76 @@ impl Store {
         Ok((!cols.is_empty()).then_some(cols))
     }
 
-    /// Makes the tables fit the program where no data can be lost: new tables are created and
-    /// seeded, new optional columns added. Everything else is left as it is and reported.
-    pub fn migrate(&mut self, p: &Program) -> Result<Migration, RunError> {
-        let mut m = Migration::default();
+    /// How many rows of `table` have a value (in `col`, or at all).
+    fn count(&self, table: &str, col: Option<&str>) -> Result<i64, RunError> {
+        let filter = col.map_or(String::new(), |c| format!(" WHERE {} IS NOT NULL", qi(c)));
+        self.db.query_row(&format!("SELECT COUNT(*) FROM {}{filter}", qi(table)), [], |r| r.get(0)).map_err(sql_err)
+    }
+
+    /// What it takes for the tables to fit the program. Nothing changes until it's applied.
+    pub fn plan(&self, p: &Program) -> Result<Plan, RunError> {
+        let mut plan = Plan::default();
+        let add = |t: &Table, c: &Col| format!("ALTER TABLE {} ADD COLUMN {} {}", qi(&t.name), qi(&c.name), c.ty.sql());
+        let drop = |t: &Table, c: &str| format!("ALTER TABLE {} DROP COLUMN {}", qi(&t.name), qi(c));
+        let ty = |c: &Col| format!("{}{}", c.ty.name(), if c.opt { "?" } else { "" });
         for t in p.tables.values() {
             let Some(have) = self.columns(&t.name)? else {
-                self.create(t)?;
-                self.seed(p, std::slice::from_ref(&t.name)).map_err(|(_, e)| e)?;
-                m.applied.push(format!("created {}", t.name));
+                plan.changes.push(Change { what: format!("create {}", t.name), sql: vec![create_sql(t)], loses: None, seed: Some(t.name.clone()) });
                 continue;
             };
+            let rows = self.count(&t.name, None)?;
+            let mut changes = vec![];
             for c in &t.cols {
-                match have.iter().find(|h| h.0 == *c.name) {
-                    None if c.opt => {
-                        self.q(&format!("ALTER TABLE {} ADD COLUMN {} {}", qi(&t.name), qi(&c.name), c.ty.sql()), vec![], true, false)?;
-                        m.applied.push(format!("added {}.{}", t.name, c.name));
+                let Some((_, sql_ty, notnull)) = have.iter().find(|h| h.0 == *c.name) else {
+                    match c.opt || rows == 0 {
+                        true => changes.push(Change::new(format!("add {}.{}: {}", t.name, c.name, ty(c)), vec![add(t, c)])),
+                        false => plan.blocked.push(format!("{}.{} is new and required, and {} has {}: make it {}? or :reset {}", t.name, c.name, t.name, rows_(rows), c.ty.name(), t.name)),
                     }
-                    None => m.pending.push(format!("{}.{} is new and required", t.name, c.name)),
-                    Some((_, ty, _)) if ty != c.ty.sql() => m.pending.push(format!("{}.{} was {ty}, is now {}", t.name, c.name, c.ty.sql())),
-                    Some((_, _, notnull)) if *notnull == c.opt => m.pending.push(format!("{}.{} is {} optional", t.name, c.name, if c.opt { "now" } else { "no longer" })),
-                    Some(_) => {}
+                    continue;
+                };
+                if sql_ty == c.ty.sql() && *notnull != c.opt {
+                    continue;
+                }
+                let held = self.count(&t.name, Some(&c.name))?;
+                match held == 0 && (c.opt || rows == 0) {
+                    true => changes.push(Change::new(format!("change {}.{} to {}", t.name, c.name, ty(c)), vec![drop(t, &c.name), add(t, c)])),
+                    false if held == 0 => plan.blocked.push(format!("{}.{} is now required, and it is empty in {}: :reset {}", t.name, c.name, rows_(rows), t.name)),
+                    false => plan.blocked.push(format!("{}.{} is now {}, and {} hold a value: :reset {}", t.name, c.name, ty(c), rows_(held), t.name)),
                 }
             }
-            for h in have.iter().filter(|h| h.0 != "id" && t.col(&h.0).is_none()) {
-                m.pending.push(format!("{}.{} is gone from the program", t.name, h.0));
+            for (h, ..) in have.iter().filter(|h| h.0 != "id" && t.col(&h.0).is_none()) {
+                let held = self.count(&t.name, Some(h))?;
+                changes.push(Change { loses: (held > 0).then(|| format!("the value in {}", rows_(held))), ..Change::new(format!("drop {}.{h}", t.name), vec![drop(t, h)]) });
             }
+            // a table with no rows is simply made again
+            if rows == 0 && !changes.is_empty() {
+                changes = vec![Change::new(format!("rebuild {} (it has no rows)", t.name), vec![format!("DROP TABLE {}", qi(&t.name)), create_sql(t)])];
+            }
+            plan.changes.extend(changes);
         }
+        Ok(plan)
+    }
+
+    /// Makes the changes, all or none.
+    pub fn apply(&mut self, p: &Program, changes: &[&Change]) -> Result<(), RunError> {
+        self.db.execute_batch("BEGIN").map_err(sql_err)?;
+        let done = changes.iter().try_for_each(|c| {
+            c.sql.iter().try_for_each(|q| self.q(q, vec![], true, false).map(|_| ()))?;
+            c.seed.iter().try_for_each(|t| self.seed(p, std::slice::from_ref(t)).map_err(|(_, e)| e))
+        });
+        self.db.execute_batch(if done.is_ok() { "COMMIT" } else { "ROLLBACK" }).map_err(sql_err)?;
         self.log.clear();
-        Ok(m)
+        done
+    }
+
+    /// Applies what loses nothing; reports the rest.
+    pub fn migrate(&mut self, p: &Program) -> Result<Migration, RunError> {
+        let plan = self.plan(p)?;
+        let (safe, losing): (Vec<&Change>, Vec<&Change>) = plan.changes.iter().partition(|c| c.loses.is_none());
+        self.apply(p, &safe)?;
+        let applied = safe.iter().map(|c| c.what.clone()).collect();
+        let pending = losing.iter().map(|c| format!("{} loses {}", c.what, c.loses.as_deref().unwrap_or(""))).chain(plan.blocked).collect();
+        Ok(Migration { applied, pending })
     }
 
     /// Drops the table, then creates and seeds it as the program declares it.

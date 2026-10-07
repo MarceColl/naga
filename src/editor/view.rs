@@ -251,6 +251,9 @@ struct Marks {
 
 
 pub fn view(st: &State) -> Frame {
+    if st.migrating {
+        return migrate_view(st);
+    }
     if let Some(at) = st.help {
         return help_view(st, at);
     }
@@ -655,8 +658,8 @@ fn stat(st: &State, f: &mut Frame) {
             f.stat.push(&format!(" {}", upper(l)), dim, None);
         }
     }
-    if !st.pending.is_empty() {
-        f.stat.push(&format!(" · PENDING {}", st.pending.len()), Style::plain(ERR), None);
+    if !st.plan.is_empty() {
+        f.stat.push(&format!(" · MIGRATE {}", st.plan.changes.len() + st.plan.blocked.len()), Style::plain(DEF), None);
     }
 }
 
@@ -695,9 +698,9 @@ fn bar(st: &State, f: &mut Frame) {
         l.push(&upper(&format!("line {}: {}{more} — ]e goes there", e.line, e.msg)), Style::plain(ERR), None);
         f.shape.push(l);
     }
-    if f.shape.is_empty() && !st.pending.is_empty() {
+    if f.shape.is_empty() && !st.plan.is_empty() {
         let mut l = Line::default();
-        l.push(&upper(&format!("pending: {} — :reset the table to apply", st.pending.join(" · "))), Style::plain(ERR), None);
+        l.push(&upper("the live tables don't fit the program — :migrate shows what it takes"), Style::plain(DEF), None);
         f.shape.push(l);
     }
 }
@@ -950,6 +953,46 @@ fn help_view(st: &State, at: usize) -> Frame {
     first.push("NAGA, BRIEFLY", Style::bold(DEF, 800), None);
     f.shape = vec![first];
     f.msg.push("J K SCROLL · D U HALF A PAGE · G TOP · ESC BACK TO THE CODE", Style::plain(DIM), None);
+    stat(st, &mut f);
+    f
+}
+
+/// What :migrate would do to the live tables, each change with what it loses.
+fn migrate_view(st: &State) -> Frame {
+    let mut f = Frame::default();
+    let p = &st.plan;
+    let row = |f: &mut Frame, mark: &str, color: Color, text: &str, note: Option<String>| {
+        let mut l = Line::default();
+        l.push(&format!("  {mark} "), Style::plain(color), None);
+        l.push(text, Style::plain(FG), None);
+        if let Some(n) = note {
+            l.push(&format!("   {n}"), Style::plain(color), None);
+        }
+        f.code.push(l);
+    };
+    if p.changes.is_empty() {
+        row(&mut f, "✓", CALL, "the live tables fit the program", None);
+    }
+    for c in &p.changes {
+        match &c.loses {
+            Some(what) => row(&mut f, "✗", ERR, &c.what, Some(format!("loses {what}"))),
+            None => row(&mut f, "·", CALL, &c.what, None),
+        }
+    }
+    if !p.blocked.is_empty() {
+        f.code.push(Line::default());
+        let mut l = Line::default();
+        l.push("  Not without a reset:", Style::plain(DIM), None);
+        f.code.push(l);
+        for b in &p.blocked {
+            row(&mut f, " ", DIM, b, None);
+        }
+    }
+    let mut first = Line::default();
+    first.push("MIGRATE THE LIVE TABLES", Style::bold(DEF, 800), None);
+    f.shape = vec![first];
+    let go = if p.changes.is_empty() { "" } else if p.changes.iter().any(|c| c.loses.is_some()) { "ENTER MAKES THESE CHANGES, DATA LOSS INCLUDED · " } else { "ENTER MAKES THESE CHANGES · " };
+    f.msg.push(&format!("{go}ESC BACK TO THE CODE"), Style::plain(DIM), None);
     stat(st, &mut f);
     f
 }

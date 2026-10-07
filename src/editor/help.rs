@@ -107,7 +107,7 @@ Normal:   h j k l   w b e   0 ^ $   gg G   12G      move
           enter on a hole: write it                 ga on a hole: hand it to Claude
           ]e [e   next, previous error              ?   this sheet
 Commands: :extract name  :inline  :hole note  :rework  :drop  :swap  :rename name  :fix
-          :data [table]  :debug n  :reset table  :help  :w  :q
+          :data [table]  :debug n  :migrate  :reset table  :help  :w  :q
 They act on the selected steps, or the step under the cursor.
 Data:     h l   live, seed, runs       j k   tables          esc   back
 Debugger: l into   j over   k out   h back   enter continue   0 restart

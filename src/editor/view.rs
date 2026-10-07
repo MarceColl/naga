@@ -5,6 +5,7 @@ use crate::editor::state::{Data, Edit, Mode, OPS, State, Tone};
 use crate::ast::ColType;
 use crate::runs::Verdict;
 use crate::editor::debug::Debug;
+use crate::editor::outline;
 use crate::machine::{self, Frame as MFrame, Status};
 use crate::value::{Value, eqv, show_rec};
 use crate::value::Name;
@@ -266,8 +267,13 @@ pub fn view(st: &State) -> Frame {
     let mut code = vec![];
     let mut caret = None;
     let mut folding = false;
+    let hidden = outline::hidden(an, &st.folds);
+    let heads = outline::headings(an);
     for (li, chars) in an.lines.iter().enumerate() {
         let ln = li + 1;
+        if hidden[li] {
+            continue;
+        }
         let text: String = chars.iter().collect();
         // a seed folds to one line, unless the cursor is in it
         let seed_end = (li + 1..an.lines.len()).find(|&j| !(an.lines[j].first().is_some_and(|c| c.is_whitespace()) && an.lines[j].iter().any(|c| !c.is_whitespace()))).unwrap_or(an.lines.len());
@@ -294,6 +300,10 @@ pub fn view(st: &State) -> Frame {
         }
         let mut line = Line { src: ln, ..Line::default() };
         code_spans(st, &marks, ln, 0, chars.len(), &mut line);
+        // a closed section says what it holds
+        if let Some(i) = heads.iter().position(|h| h.line == ln).filter(|&i| st.folds.get(&heads[i].text).is_some_and(|f| *f != outline::Fold::Open)) {
+            line.push(&format!("  {}", upper(&outline::summary(an, &heads, i))), Style::plain(FAINT), None);
+        }
         if let Some(d) = st.debug.as_ref().filter(|_| cur.is_some_and(|c| c.pos.line == ln)) {
             let (ghost, bad) = ghost(&d.now().st);
             line.push(&format!("   ‹ {ghost}"), Style::plain(if bad { ERR } else { FAINT }), None);
@@ -473,10 +483,16 @@ fn code_spans(st: &State, m: &Marks, ln: usize, a: usize, b: usize, line: &mut L
     let def = an.def_at(ln);
     let hole = an.holes().find(|h| h.range.pos.line == ln);
     let table_decl = chars.iter().collect::<String>().strip_prefix("table").filter(|r| r.starts_with(' ')).map(|r| r.split_whitespace().next().unwrap_or("").to_string());
+    let level = chars.iter().take_while(|c| **c == '*').count();
     for (i, &ch) in chars.iter().enumerate().take(b).skip(a) {
         let sid = row[i];
         let step = (sid != 0).then(|| an.step(sid)).flatten();
-        let mut style = class_style(cls[i]);
+        let mut style = match level {
+            0 => class_style(cls[i]),
+            _ if i < level => Style::plain(FAINT),
+            1 => Style::bold(FG, 800),
+            _ => Style::bold(DIM, 800),
+        };
         let mut target = step.map(|s| Target::Step(s.id));
         let in_def = def.is_some_and(|d| i < d.name.chars().count());
         if let Some(t) = table_decl.as_ref().filter(|t| (6..6 + t.chars().count()).contains(&i)) {

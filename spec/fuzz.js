@@ -9,7 +9,7 @@ let seed = +process.argv[3] || 1;
 const rnd = n => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
 // only what the reference parses: .nag sources without naga-only `route` lines
 const read = d => fs.readdirSync(path.join(root, d)).filter(f => f.endsWith('.nag'))
-  .map(f => fs.readFileSync(path.join(root, d, f), 'utf8')).filter(s => !/^route /m.test(s));
+  .map(f => fs.readFileSync(path.join(root, d, f), 'utf8')).filter(s => !/^(route |\*)/m.test(s));
 const pool = [...read('examples'), ...read('tests/cases')];
 const steps = ['+{x: 1}', '-{id}', '.{id}', 'say "{x}"', '@body( nop )', '(nop ‖ +{y: 2})', 'show', '⊃body', 'id→key', 'n+1', '⊔{a: 1}', '⫽{a: 2}'];
 const lines = s => s.split('\n'), words = s => s.split(/( +)/);

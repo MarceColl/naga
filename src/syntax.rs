@@ -946,15 +946,22 @@ pub fn parse(src: &str) -> Program {
     let lines: Vec<String> = src.split('\n').map(String::from).collect();
     let mut p = Program::default();
     let mut chunks: Vec<Vec<usize>> = vec![];
+    // a heading (`* Accounts`) is for people: skipped, and nothing continues across it
+    let mut after_heading = false;
     for (idx, raw) in lines.iter().enumerate() {
+        if raw.starts_with('*') {
+            after_heading = true;
+            continue;
+        }
         let code = strip_comment(raw);
         if code.trim().is_empty() {
             continue;
         }
         match chunks.last_mut() {
-            Some(cur) if code.starts_with([' ', '\t']) => cur.push(idx),
+            Some(cur) if code.starts_with([' ', '\t']) && !after_heading => cur.push(idx),
             _ => chunks.push(vec![idx]),
         }
+        after_heading = false;
     }
     for ch in &chunks {
         if let Err(e) = chunk(&mut p, &lines, ch) {

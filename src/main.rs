@@ -10,14 +10,20 @@ const STARTER: &str = r#"-- A naga program. `naga start` opens it and serves it 
 -- Routes hand their word the path params and query at the top level and the JSON body in
 -- `body`; every route word leaves {status, json}.
 
+* Data
+
 table notes :: {title: Text, done: Bool}
 
 seed notes = [{title: "Try naga", done: false},
               {title: "Change a word while it runs", done: false}]
 
+* Routes
+
 route GET  /notes                   = list-notes
 route GET  /notes/:id:Int           = get-note
 route POST /notes {title: Text}     = add-note
+
+* Words
 
 reply = .{status json}
 
@@ -30,6 +36,8 @@ found {note}     = +{status: 200, json: note}
 
 add-note = +{note: {title: body.title, done: false}} notes.insert
            +{status: 201, json: note} reply
+
+* Runs — Tab folds a section, Shift-Tab the whole outline
 
 run "list the notes"
   GET /notes → 200

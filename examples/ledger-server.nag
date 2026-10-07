@@ -3,6 +3,8 @@
 -- Each route hands its word path params and query fields at the top level, the JSON
 -- body in `body` and the time in `time`. Every route word leaves {status, json}.
 
+* Data
+
 table accounts     :: {name: Text, kind: Const, archived: Bool}
 table transactions :: {date: Text, payee: Text, memo: Text?}
 table postings     :: {tx-id: Int, account-id: Int, amount: Num, date: Text}
@@ -26,6 +28,8 @@ seed postings = [{tx-id: 1, account-id: 1, amount: 250000, date: "2026-09-01"},
                  {tx-id: 3, account-id: 6, amount: 120000, date: "2026-09-27"},
                  {tx-id: 3, account-id: 1, amount: -120000, date: "2026-09-27"}]
 
+* Routes
+
 route GET    /accounts                                        = get-accounts
 route GET    /accounts/:id:Int                                = get-account
 route POST   /accounts {name: Text, kind: Const}              = post-account
@@ -40,6 +44,8 @@ route GET    /reports/balance-sheet                           = get-balance-shee
 route GET    /reports/income?from:Text&to:Text                = get-income
 
 reply = .{status json}
+
+* Accounts
 
 get-accounts = accounts.where {archived: false} @accounts( with-balance )
                +{status: 200, json: accounts} reply
@@ -82,6 +88,8 @@ can-delete                        = accounts.delete account-deleted
 
 account-deleted {-missing} = +{status: 404, json: "no such account"}
 account-deleted {-deleted} = +{status: 204, json: nil}
+
+* Transactions
 
 get-transactions {account} = postings.where when account-id == ^account
                              @postings( with-payee ) +{status: 200, json: postings} reply
@@ -130,6 +138,8 @@ delete-transaction = postings.where when tx-id == ^id @postings( postings.delete
 tx-deleted {-missing} = +{status: 404, json: "no such transaction"}
 tx-deleted {-deleted} = +{status: 204, json: nil}
 
+* Reports
+
 get-balance-sheet =
   +{assets: {kind: Asset}, liabilities: {kind: Liability}, equity: {kind: Equity}}
   (@assets( kind-total ) ‖ @liabilities( kind-total ) ‖ @equity( kind-total ))
@@ -154,6 +164,8 @@ kind-flow = accounts.where when kind == ^kind @accounts( flow .{name flow} )
 -- inside a where, ^ is the record being processed; ^^^ is two records further out
 flow = postings.where when account-id == ^id and date ≥ ^^^from and date < ^^^to
        +{flow: sum(postings.amount)} -{postings}
+
+* Runs
 
 -- runs: requests sent in order against freshly seeded tables, with the answers they expect
 run "POST a balanced transaction"

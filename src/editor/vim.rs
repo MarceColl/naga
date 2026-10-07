@@ -4,7 +4,9 @@
 use crate::ast::Pos;
 use crate::editor::state::{Effect, Event, Key, Mode, State, Tone, open_data, run, start_agent};
 use crate::editor::text::{self, Motion};
+use crate::editor::outline::{self, Fold};
 use crate::editor::view::Target;
+use std::rc::Rc;
 
 pub fn event(st: State, ev: Event) -> State {
     match ev {
@@ -20,10 +22,10 @@ pub fn event(st: State, ev: Event) -> State {
             }
         }
         Event::Release => State { drag: None, ..st },
-        Event::Key(k, _) => match st.mode.clone() {
+        Event::Key(k, shift) => match st.mode.clone() {
             Mode::Insert => insert(st, k),
             Mode::Cmd(c, sel) => command(st, c, sel, k),
-            Mode::Normal | Mode::Visual(..) => normal(st, k),
+            Mode::Normal | Mode::Visual(..) => normal(st, k, shift),
         },
         _ => st,
     }
@@ -134,10 +136,36 @@ fn motion(s: &str) -> Option<Motion> {
 
 /// Keys that start a longer command: wait for the rest.
 fn waits(s: &str) -> bool {
-    matches!(s, "d" | "c" | "y" | "g" | "z" | "[" | "]" | "dg" | "cg" | "yg")
+    matches!(s, "d" | "c" | "y" | "g" | "z" | "[" | "]" | "dg" | "cg" | "yg" | "Z")
 }
 
-fn normal(st: State, k: Key) -> State {
+/// Changes the folds; the cursor moves out of whatever closed over it.
+fn fold(st: State, f: impl Fn(&crate::editor::analysis::Analysis, &outline::Folds, usize) -> outline::Folds) -> State {
+    let folds = Rc::new(f(&st.an, &st.folds, st.cursor.line));
+    let st = State { folds, ..st };
+    let line = visible_line(&st, st.cursor.line, -1);
+    let cursor = if line == st.cursor.line { st.cursor } else { Pos { line, col: 0 } };
+    reveal(State { cursor, ..st })
+}
+
+/// `line`, or the nearest shown line from it in direction `dir` (falling back to the other way).
+fn visible_line(st: &State, line: usize, dir: isize) -> usize {
+    let hidden = outline::hidden(&st.an, &st.folds);
+    let shown = |l: usize| !hidden.get(l - 1).copied().unwrap_or(false);
+    let walk = |d: isize| {
+        let mut l = line as isize;
+        while l >= 1 && (l as usize) <= hidden.len() {
+            if shown(l as usize) {
+                return Some(l as usize);
+            }
+            l += d;
+        }
+        None
+    };
+    walk(dir).or_else(|| walk(-dir)).unwrap_or(line)
+}
+
+fn normal(st: State, k: Key, shift: bool) -> State {
     let key = match k {
         Key::Left | Key::Backspace => 'h',
         Key::Right => 'l',
@@ -147,7 +175,9 @@ fn normal(st: State, k: Key) -> State {
         Key::Redo => return redo(st),
         Key::Escape => return State { mode: Mode::Normal, keys: String::new(), msg: None, ..st },
         Key::Enter => return change_hole(st),
-        Key::Tab | Key::Home => return st,
+        Key::Tab if shift => return fold(State { keys: String::new(), ..st }, |an, f, _| outline::cycle_all(an, f)),
+        Key::Tab => return fold(State { keys: String::new(), ..st }, |an, f, line| outline::cycle(an, f, line).unwrap_or_else(|| f.clone())),
+        Key::Home => return st,
         Key::Char(c) => c,
     };
     let keys = format!("{}{key}", st.keys);
@@ -225,6 +255,30 @@ fn normal(st: State, k: Key) -> State {
             None => st.say("no hole on this line", Tone::No),
         },
         "ZZ" | "ZQ" => State { effect: Some(Effect::Quit), ..st },
+        "za" => fold(st, |an, f, line| {
+            let mut f = f.clone();
+            if let Some(h) = outline::headings(an).into_iter().find(|h| h.line == line) {
+                let now = f.get(&h.text).copied().unwrap_or_default();
+                f.insert(h.text, if now == Fold::Open { Fold::Folded } else { Fold::Open });
+            }
+            f
+        }),
+        "zM" => fold(st, |an, _, _| outline::all(an, Fold::Folded)),
+        "zR" => fold(st, |_, _, _| outline::Folds::new()),
+        "[[" | "]]" => {
+            let line = st.cursor.line;
+            let hs = outline::headings(&st.an);
+            let hidden = outline::hidden(&st.an, &st.folds);
+            let shown = |h: &&outline::Heading| !hidden[h.line - 1];
+            let to = match rest {
+                "]]" => hs.iter().filter(shown).find(|h| h.line > line),
+                _ => hs.iter().rev().filter(shown).find(|h| h.line < line),
+            };
+            match to {
+                Some(h) => reveal(State { cursor: Pos { line: h.line, col: 0 }, goal: 0, ..st }),
+                None => st,
+            }
+        }
         _ => st,
     }
 }
@@ -243,6 +297,10 @@ fn go_n(st: State, m: Motion, n: usize) -> State {
     }
     let p = text::clamp(ls, p, false);
     let goal = if matches!(m, Motion::Up | Motion::Down) { st.goal } else { p.col };
+    // a fold is one line to move over; landing inside one lands on its heading
+    let dir = if m == Motion::Down { 1 } else { -1 };
+    let line = visible_line(&st, p.line, dir);
+    let p = if line == p.line { p } else { text::clamp(ls, Pos { line, col: goal }, false) };
     State { cursor: p, goal, ..st }
 }
 
@@ -405,6 +463,28 @@ mod tests {
         assert_eq!(text(&st), "z\n");
         let st = keys(State::new("ab cd"), "veyP");
         assert_eq!(text(&st), "abab cd");
+    }
+
+    #[test]
+    fn folds_open_and_close_and_the_cursor_steps_over_them() {
+        use crate::editor::state::{Event, Key, update};
+        let src = "* A\na = nop\nb = nop\n* B\nc = nop\n";
+        let tab = |st: State, shift| update(st, Event::Key(Key::Tab, shift));
+        let st = tab(State::new(src), false);
+        let st = keys(st, "j");
+        assert_eq!(st.cursor.line, 4, "j steps over the folded section");
+        let st = keys(st, "k");
+        assert_eq!(st.cursor.line, 1);
+        let st = keys(tab(st, false), "jj");
+        assert_eq!(st.cursor.line, 3, "open again");
+        let st = keys(st, "zM");
+        assert_eq!(st.cursor.line, 1, "folding moves the cursor out to the heading");
+        let st = keys(st, "]]");
+        assert_eq!(st.cursor.line, 4);
+        let st = keys(st, "zRj");
+        assert_eq!(st.cursor.line, 5);
+        let st = tab(st, true);
+        assert_eq!(st.cursor.line, 4, "overview");
     }
 
     #[test]

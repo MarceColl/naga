@@ -5,6 +5,7 @@ mod claude;
 mod debug;
 mod gpu;
 mod ops;
+mod outline;
 mod state;
 mod text;
 mod vim;
@@ -236,6 +237,7 @@ fn key(name: &str) -> Option<(Key, bool)> {
         "backspace" => Key::Backspace,
         "undo" => Key::Undo,
         "home" => Key::Home,
+        "tab" => Key::Tab,
         _ => return None,
     };
     Some((k, shift))

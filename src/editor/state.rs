@@ -108,6 +108,8 @@ pub struct State {
     pub mode: Mode,
     /// Keys of a normal-mode command still being typed: a count, `d`, `g`.
     pub keys: String,
+    /// Which sections are folded, by heading.
+    pub folds: Rc<crate::editor::outline::Folds>,
     /// The text `y`, `d` and `x` took, and whether it is whole lines.
     pub reg: Option<(String, bool)>,
     /// Earlier and undone (text, cursor) pairs.
@@ -150,6 +152,7 @@ impl State {
             goal: 0,
             mode: Mode::Normal,
             keys: String::new(),
+            folds: Rc::default(),
             reg: None,
             undo: vec![],
             redo: vec![],

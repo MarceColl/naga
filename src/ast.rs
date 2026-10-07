@@ -398,10 +398,19 @@ pub struct Run {
 impl Program {
     /// The route that answers `verb path`, with the path's params and its query.
     pub fn route_for(&self, verb: &str, path: &str) -> Option<(usize, Pairs, Pairs)> {
-        let (path, query) = path.split_once('?').unwrap_or((path, ""));
-        let query: Pairs = query.split('&').filter(|q| !q.is_empty()).map(|q| q.split_once('=').unwrap_or((q, ""))).map(|(k, v)| (decode(k, true), decode(v, true))).collect();
-        self.routes.iter().enumerate().filter(|(_, r)| &*r.verb == verb).find_map(|(i, r)| Some((i, r.bind(path)?, query.clone())))
+        bind(&self.routes, verb, path)
     }
+
+    /// The live page at `path`, with the path's params and its query.
+    pub fn live_for(&self, path: &str) -> Option<(usize, Pairs, Pairs)> {
+        bind(&self.lives, "GET", path)
+    }
+}
+
+fn bind(routes: &[Route], verb: &str, path: &str) -> Option<(usize, Pairs, Pairs)> {
+    let (path, query) = path.split_once('?').unwrap_or((path, ""));
+    let query: Pairs = query.split('&').filter(|q| !q.is_empty()).map(|q| q.split_once('=').unwrap_or((q, ""))).map(|(k, v)| (decode(k, true), decode(v, true))).collect();
+    routes.iter().enumerate().filter(|(_, r)| &*r.verb == verb).find_map(|(i, r)| Some((i, r.bind(path)?, query.clone())))
 }
 
 #[derive(Clone, Debug)]

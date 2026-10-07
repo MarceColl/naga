@@ -12,3 +12,9 @@ render = +{html: [:main, {style: "font: 32px system-ui; text-align: center; marg
                   [:h1, "{count}"],
                   [:button, {on-click: :dec}, "−"], " ",
                   [:button, {on-click: :inc}, "+"]]}
+
+run "counts up and down"
+  LIVE /counter        → {count: 0}
+  EVENT {name: :inc}   → {count: 1}
+  EVENT {name: :inc}   → {count: 2}
+  EVENT {name: :dec}   → {count: 1}

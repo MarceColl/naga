@@ -2,7 +2,6 @@
 //! order, against one freshly seeded store, as `crate::runs` sends them.
 use crate::editor::analysis::{Analysis, Range};
 use crate::machine::{self, Runtime, Status};
-use crate::serve::{Req, request};
 use crate::store::Store;
 use crate::value::Name;
 use std::rc::Rc;
@@ -46,13 +45,11 @@ pub fn record(an: &Analysis, run: usize, bps: Vec<usize>) -> Result<Debug, Strin
     let mut store = Store::new(p).map_err(|e| e.msg)?;
     store.seed(p, &all).map_err(|(_, e)| e.msg)?;
     let (mut hist, mut log, mut reqs) = (vec![], vec![], vec![]);
+    let mut page = None;
     for (i, q) in r.requests.iter().enumerate() {
         reqs.push(format!("{} {}", q.verb, q.path));
-        let Some((route, path, query)) = p.route_for(&q.verb, &q.path) else { continue };
-        let lit = |e: &crate::ast::Expr| crate::eval::eval(e, &crate::eval::Env { subj: &Default::default(), now: 0.0, outer: &[] });
-        let body = q.body.as_ref().and_then(|b| lit(b).ok()).map_or_else(String::new, |b| crate::value::to_plain_json(&b));
-        let Ok(subj) = request(&p.routes[route], &Req { route, path, query, body }) else { continue };
-        let mut s = machine::initial(p, &p.routes[route].word, std::sync::Arc::new(subj));
+        let Ok((word, Ok(subj))) = crate::runs::start(p, q, page.as_ref()) else { continue };
+        let mut s = machine::initial(p, &word, std::sync::Arc::new(subj));
         let mut rt = Runtime { log: &mut log, store: Some(&mut store), store_error: None };
         hist.push(Snap { req: i, st: s.clone() });
         for _ in 0..BUDGET {
@@ -64,6 +61,10 @@ pub fn record(an: &Analysis, run: usize, bps: Vec<usize>) -> Result<Debug, Strin
         }
         if s.status != Status::Done {
             break;
+        }
+        // the page's next event runs on the state this step left
+        if matches!(&*q.verb, "LIVE" | "EVENT") {
+            page = crate::live::split(&s.subj).ok().map(|(state, _)| (word, state));
         }
     }
     if hist.is_empty() {

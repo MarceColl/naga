@@ -126,3 +126,19 @@ fn routes_are_checked_as_call_sites() {
     assert_eq!(nested("k"), ["2:19 w needs body.items.k, but nothing on this path provides it (w) (when route POST /x runs)"]);
     assert!(errors(&ledger()).is_empty(), "{:?}", errors(&ledger()));
 }
+
+#[test]
+fn live_pages_are_checked_on_mount_refresh_and_events() {
+    let errors = |src: &str| {
+        let r = naga::check::Checker::default().check(&parse(src), None);
+        r.errors.iter().map(|e| format!("{}:{} {}", e.line, e.col, e.msg)).collect::<Vec<_>>()
+    };
+    for f in ["counter", "board"] {
+        let src = std::fs::read_to_string(format!("{}/examples/{f}.nag", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        assert!(errors(&src).is_empty(), "{f}: {:?}", errors(&src));
+    }
+    // the state the mount left comes back on every event
+    assert!(errors("live /c = c\nc {event} = count+1 r\nc {!count} = +{count: 0} r\nc = r\nr = +{html: \"{count}\"}\n").is_empty());
+    assert_eq!(errors("live /c = c\nc {-event: {name: :inc}} = count+1\nc {!count} = +{count: 0} r\nc = r\nr = +{html: \"{count}\"}\n"), ["1:0 live /c on an event: c can finish without html"]);
+    assert_eq!(errors("live /c/:n:Int = c\nc = +{html: [:p, n, x]}\n"), ["2:4 c needs x, but nothing on this path provides it (c) (when live /c/:n:Int runs on mount)"]);
+}

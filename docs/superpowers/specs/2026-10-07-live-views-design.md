@@ -52,8 +52,20 @@ ws /naga/live?s=id ◀──▶ events in, html out; the client morphs the DOM (
 
 ## Checker (slice 3)
 
-A live page is a call site like a route: its input is the params, its state is open, and
-the word must leave `html`.
+A live page is checked like a route, three times: on mount (its params and `time`), then on
+the state each mount path leaves: a refresh (no event) and an event (`event: {name: Const, …}`).
+Every path must leave `html`. Each run gets a fresh `time`; the state never keeps it.
+
+## Runs (slice 3)
+
+```
+run "counts"
+  LIVE /counter        → {count: 0}
+  EVENT {name: :inc}   → {count: 1}
+```
+
+`LIVE` mounts a page, `EVENT` sends it one; the state after each must have at least the fields
+written. They mix with requests in one run, and the debugger steps through them.
 
 ## Slices
 

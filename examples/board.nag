@@ -11,3 +11,7 @@ render = notes.all @notes( +{li: [:li, text]} )
          +{html: [:main, [:ul, notes.li],
                   [:form, {on-submit: :add}, [:input, {name: "text"}], [:button, "Add"]]]}
          -{notes}
+
+run "adds a note"
+  LIVE /board                                 → {}
+  EVENT {name: :add, form: {text: "hello"}}   → {}

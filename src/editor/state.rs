@@ -700,6 +700,17 @@ pub mod tests {
         assert!(keys(st, "<esc>").debug.is_none());
     }
 
+    #[test]
+    fn the_debugger_steps_through_a_live_pages_events() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/counter.nag")).unwrap();
+        let d = keys(State::new(&src), ":debug 1<cr>").debug.expect("recorded");
+        assert_eq!(&d.reqs[..], ["LIVE /counter", "EVENT {name: :inc}", "EVENT {name: :inc}", "EVENT {name: :dec}"]);
+        assert_eq!(d.hist.iter().map(|s| s.req).collect::<std::collections::BTreeSet<_>>().len(), 4, "every event is stepped");
+        let last = &d.hist.last().unwrap().st;
+        assert_eq!(last.status, crate::machine::Status::Done);
+        assert_eq!(last.subj.get("count").map(|v| v.text()), Some("1".into()), "the last event ran on the state the others left");
+    }
+
     fn reply(st: State, code: &str) -> State {
         let id = st.agent.as_ref().unwrap().id;
         let fill = Fill { code: code.into(), helpers: None, why: "test".into() };

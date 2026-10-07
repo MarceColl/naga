@@ -269,8 +269,10 @@ struct CallSite<'a> {
     label: String,
     unplaced: String,
     line: usize,
-    /// A route must leave {status, json}.
-    reply: bool,
+    /// What it must leave: a route {status, json}, a live page html.
+    leaves: &'static [&'static str],
+    /// A live page: after mounting, it runs on the state it left.
+    page: Option<String>,
 }
 
 fn field(d: &FieldDecl) -> (Name, ty::Field) {
@@ -290,10 +292,11 @@ fn call_sites<'a>(p: &'a Program, entry: Option<&'a Name>) -> Vec<CallSite<'a>> 
     let entry = entry.filter(|e| p.words.contains_key(*e)).map(|e| CallSite {
         word: e,
         input: Shape::open(Origin::Closed),
-        label: e.to_string(),
+        label: format!("{e} runs"),
         unplaced: format!("running {e} from an empty record"),
         line: p.words[e].clauses[0].chunk_line,
-        reply: false,
+        leaves: &[],
+        page: None,
     });
     let routes = p.routes.iter().filter(|r| p.words.contains_key(&r.word)).map(|r| {
         let mut fields: IndexMap<Name, ty::Field> = r.params().map(field).collect();
@@ -302,9 +305,16 @@ fn call_sites<'a>(p: &'a Program, entry: Option<&'a Name>) -> Vec<CallSite<'a>> 
         }
         fields.insert("time".into(), ty::Field { ty: ty::Ty::Text, opt: false });
         let label = format!("route {} {}", r.verb, r.path);
-        CallSite { word: &r.word, input: Shape::closed(fields), unplaced: label.clone(), label, line: r.line, reply: true }
+        CallSite { word: &r.word, input: Shape::closed(fields), label: format!("{label} runs"), unplaced: label, line: r.line, leaves: &["status", "json"], page: None }
     });
-    entry.into_iter().chain(routes).collect()
+    // a live page runs on its params when mounted, then on whatever state it left, with an event
+    let lives = p.lives.iter().filter(|l| p.words.contains_key(&l.word)).map(|l| {
+        let mut fields: IndexMap<Name, ty::Field> = l.params().map(field).collect();
+        fields.insert("time".into(), ty::Field { ty: ty::Ty::Text, opt: false });
+        let label = format!("live {}", l.path);
+        CallSite { word: &l.word, input: Shape::closed(fields), unplaced: format!("{label} on mount"), label: format!("{label} runs on mount"), line: l.line, leaves: &["html"], page: Some(label) }
+    });
+    entry.into_iter().chain(routes).chain(lives).collect()
 }
 
 impl Checker {
@@ -386,11 +396,25 @@ impl Checker {
             }
         }
         for site in call_sites(p, entry) {
+          let mut runs = vec![(World::new(site.input.clone()), site.label.clone(), site.unplaced.clone(), site.page.as_ref())];
+          while let Some((input, label, unplaced, page)) = runs.pop() {
             let mut top = Cx { p, sigs: &sigs, local: HashMap::new(), here: None, word: None, ci: 0, chunk_line: 0, errors: vec![], report_again: false, span: None, pending: vec![], points: IndexMap::new() };
-            let outs = top.apply_sig(World::new(site.input), sigs.get(site.word).cloned(), site.word, Pos { line: 1, col: 0 });
-            // a route answers with whatever status and json its word leaves
-            for w in outs.iter().filter(|w| site.reply && w.live()) {
-                for f in ["status", "json"] {
+            let outs = top.apply_sig(input, sigs.get(site.word).cloned(), site.word, Pos { line: 1, col: 0 });
+            // a live page then runs on the state its mount left: again with no event (a refresh), and with one
+            if let Some(page) = page {
+                for w in outs.iter().filter(|w| w.live()) {
+                    let shape = w.shape.del(&"html".into()).del(&"event".into()).set(&"time".into(), ty::Ty::Text, false);
+                    let state = World { trail: vec![], ..w.with_shape(shape) };
+                    let event = ty::rec(Shape::new([("name".into(), ty::Field { ty: ty::Ty::Const(None), opt: false })].into_iter().collect(), Default::default(), Origin::Input("event".into())));
+                    let on_event = state.with_shape(state.shape.set(&"event".into(), event, false));
+                    for (w, on) in [(state, "a refresh"), (on_event, "an event")] {
+                        runs.push((w, format!("{page} runs on {on}"), format!("{page} on {on}"), None));
+                    }
+                }
+            }
+            // a route answers with whatever status and json its word leaves; a live page shows its html
+            for w in outs.iter().filter(|w| w.live()) {
+                for f in site.leaves {
                     match world::lookup(w, &w.shape, f) {
                         world::Look::Present(..) => {}
                         world::Look::Opt(_) => top.errors.push((None, format!("{} might finish without {f}", site.word).into())),
@@ -403,12 +427,13 @@ impl Checker {
                 match at.filter(|a| p.words.contains_key(&a.word)) {
                     Some(at) => {
                         let chained = msg.find(" (").is_some_and(|i| msg[i..].contains(" ← "));
-                        let msg = if chained { format!("{msg}, when {} runs", site.label) } else { format!("{msg} (when {} runs)", site.label) };
+                        let msg = if chained { format!("{msg}, when {label}") } else { format!("{msg} (when {label})") };
                         push(abs(&at), at.col, msg, place(&d));
                     }
-                    None => push(site.line, 0, format!("{}: {msg}", site.unplaced), place(&d)),
+                    None => push(site.line, 0, format!("{unplaced}: {msg}"), place(&d)),
                 }
             }
+          }
         }
         // a failure explained once and reported again plainly (by a caller, or another pass)
         // keeps the explanation

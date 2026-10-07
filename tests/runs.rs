@@ -60,7 +60,7 @@ fn run_errors() {
     assert_eq!(first("run \"x\"\n  GET /open {a: 1} → 200\n"), "13:0 route GET /open takes no body");
     assert_eq!(first("run \"x\"\n  GET /open 200\n"), "13:12 expected “→” before the status the request should get, like  GET /accounts/1 → 200");
     assert_eq!(first("run \"x\"\n  GET /open → 99\n"), "13:14 expected a status from 100 to 599, like 200");
-    assert_eq!(first("run \"x\"\n  open → 200\n"), "13:2 a request starts with a verb: GET, POST, PUT, PATCH, DELETE");
+    assert_eq!(first("run \"x\"\n  open → 200\n"), "13:2 a step starts with GET, POST, PUT, PATCH, DELETE, LIVE or EVENT");
     assert_eq!(first("run \"x\"\n"), "12:0 run \"x\" has no requests: add lines like  GET /accounts/1 → 200");
 }
 

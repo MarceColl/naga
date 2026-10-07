@@ -77,11 +77,23 @@ Nested bodies work: {lines: [{sku: Const, qty: Int}]}. A bad request gets a 400 
 word runs. The word leaves {status, json}. A Const field takes a JSON string ("Asset" → :asset)
 and goes back out as one ("asset").
 
+# Live pages
+  live /counter = counter
+The word runs on the page's state, with `time`: on mount the state is the params; on a click
+it also has event: {name: :inc}. It leaves `html`; the rest is the next state.
+  [:button, {on-click: :inc}, "+"]        an element: [:tag, {attrs}?, child…]
+  [:form, {on-submit: :add}, …]            event: {name: :add, form: {…fields}}
+  [:input, {on-input: :typed}]             event: {name: :typed, value}
+Pages refresh (no event) after a table write and after each change to the program.
+
 # Runs
 Requests the program must answer, checked on every change.
   run "add one, then read it back"
     POST /notes {title: "Ship it"} → 201 {id: 3, title: "Ship it", done: false}
     GET /notes/3 → 200
+  run "counts"
+    LIVE /counter → {count: 0}            a page's state has at least these fields
+    EVENT {name: :inc} → {count: 1}
 
 # Sections
   * Accounts          ** Reading

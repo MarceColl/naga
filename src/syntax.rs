@@ -1006,6 +1006,11 @@ fn verb(s: &str) -> Option<&'static str> {
     VERBS.iter().copied().find(|v| v.eq_ignore_ascii_case(s))
 }
 
+/// What starts a step of a run: an HTTP verb, `LIVE` (mount a page) or `EVENT` (send it one).
+fn step(s: &str) -> Option<&'static str> {
+    verb(s).or(["LIVE", "EVENT"].into_iter().find(|v| v.eq_ignore_ascii_case(s)))
+}
+
 /// The byte range of the first word at or after `from`.
 fn word_at(s: &str, from: usize) -> (usize, usize) {
     let a = from + s[from..].find(|c: char| !c.is_whitespace()).unwrap_or(s.len() - from);
@@ -1026,7 +1031,7 @@ fn run(lines: &[String], ch: &[usize]) -> R<Run> {
     for &li in &ch[1..] {
         let first = strip_comment(&lines[li]).split_whitespace().next().unwrap_or("");
         match groups.last_mut() {
-            Some(g) if verb(first).is_none() => g.push(li),
+            Some(g) if step(first).is_none() => g.push(li),
             _ => groups.push(vec![li]),
         }
     }
@@ -1038,17 +1043,19 @@ fn run(lines: &[String], ch: &[usize]) -> R<Run> {
 }
 
 /// `VERB /path?query [body] → status [json]`; the path is raw text, as in a route.
+/// On a live page: `LIVE /path → {state}`, then `EVENT {name: :inc} → {state}`.
 fn request(lines: &[String], g: &[usize]) -> R<Request> {
     let first = strip_comment(&lines[g[0]]);
     let line = g[0] + 1;
     let col = |i: usize| first[..i].encode_utf16().count();
     let (va, vb) = word_at(first, 0);
-    let Some(verb) = verb(&first[va..vb]) else {
-        return serr(format!("a request starts with a verb: {}", VERBS.join(", ")), Some((line, col(va))));
+    let Some(verb) = step(&first[va..vb]) else {
+        return serr(format!("a step starts with {}, LIVE or EVENT", VERBS.join(", ")), Some((line, col(va))));
     };
-    let (pa, pb) = word_at(first, vb);
+    let page = matches!(verb, "LIVE" | "EVENT");
+    let (pa, pb) = if verb == "EVENT" { (vb, vb) } else { word_at(first, vb) };
     let path = &first[pa..pb];
-    if !path.starts_with('/') {
+    if verb != "EVENT" && !path.starts_with('/') {
         return serr("a request path starts with /, like /accounts/1", Some((line, col(pa))));
     }
     let blanked = format!("{}{}{}", &first[..pa], " ".repeat(pb - pa), &first[pb..]);
@@ -1061,13 +1068,26 @@ fn request(lines: &[String], g: &[usize]) -> R<Request> {
     let body = if ts.is_op("→", 0) { None } else { Some(expr(&mut ts, 0)?) };
     if !ts.is_op("→", 0) {
         let at = ts.peek(0).or(ts.t.last()).cloned();
-        return ts.err("expected “→” before the status the request should get, like  GET /accounts/1 → 200", at.as_ref());
+        let like = if page { "the state the page should have, like  EVENT {name: :inc} → {count: 1}" } else { "the status the request should get, like  GET /accounts/1 → 200" };
+        return ts.err(format!("expected “→” before {like}"), at.as_ref());
     }
+    if verb == "EVENT" && body.is_none() {
+        return serr("an event is a record, like  EVENT {name: :inc}", Some((line, col(va))));
+    }
+    if verb == "LIVE" && body.is_some() {
+        return serr("a page is mounted with no body: LIVE /path → {state}", Some((line, col(pb))));
+    }
+    // a page's step is shown by its event: `EVENT {name: :inc}`
+    let path = if verb == "EVENT" { first[vb..].split('→').next().unwrap_or("").trim() } else { path };
     ts.next();
-    let st = ts.next();
-    let status = match st {
-        Some(Token { t: Tk::Num(n), .. }) if n.fract() == 0.0 && (100.0..600.0).contains(&n) => n as u16,
-        _ => return ts.err("expected a status from 100 to 599, like 200", st.as_ref()),
+    let status = if page {
+        200
+    } else {
+        let st = ts.next();
+        match st {
+            Some(Token { t: Tk::Num(n), .. }) if n.fract() == 0.0 && (100.0..600.0).contains(&n) => n as u16,
+            _ => return ts.err("expected a status from 100 to 599, like 200", st.as_ref()),
+        }
     };
     let json = if ts.at_end() { None } else { Some(expr(&mut ts, 0)?) };
     if let Some(t) = ts.peek(0) {
@@ -1218,7 +1238,19 @@ fn check_refs(p: &mut Program) {
             .or_else(|| same.clone().find(|q| q.verb == r.verb).map(|q| format!("route {} {} is already declared on line {}", r.verb, r.path, q.line)));
         errors.extend(msg.map(|msg| Diag { line: r.line, col: 0, msg }));
     }
-    for q in p.runs.iter().flat_map(|r| &r.requests) {
+    for r in &p.runs {
+        let mut mounted = false;
+        for q in &r.requests {
+            let msg = match &*q.verb {
+                "LIVE" => p.live_for(&q.path).is_none().then(|| format!("LIVE {} matches no live page", q.path)),
+                "EVENT" => (!mounted).then(|| "an EVENT goes to the page mounted before it: start with LIVE /path".to_string()),
+                _ => None,
+            };
+            mounted |= &*q.verb == "LIVE" && msg.is_none();
+            errors.extend(msg.map(|msg| Diag { line: q.line, col: 0, msg }));
+        }
+    }
+    for q in p.runs.iter().flat_map(|r| &r.requests).filter(|q| !matches!(&*q.verb, "LIVE" | "EVENT")) {
         let msg = match p.route_for(&q.verb, &q.path) {
             None => Some(format!("{} {} matches no route", q.verb, q.path)),
             Some((i, ..)) if q.body.is_some() && p.routes[i].body.is_none() => Some(format!("route {} {} takes no body", q.verb, p.routes[i].path)),

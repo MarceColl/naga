@@ -97,10 +97,10 @@ fn element(out: &mut String, tag: &str, rest: &[Value]) {
 }
 
 // ---------- sessions ----------
-/// The word left `html`, which is shown; the rest, but `event`, is the next state.
-fn split(subj: &Rec) -> Result<(Rec, String), String> {
+/// The word left `html`, which is shown; the rest, but `event` and `time`, is the next state.
+pub fn split(subj: &Rec) -> Result<(Rec, String), String> {
     let html = subj.get("html").ok_or("the page left no html")?;
-    let state = subj.iter().filter(|(k, _)| !matches!(&***k, "html" | "event")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    let state = subj.iter().filter(|(k, _)| !matches!(&***k, "html" | "event" | "time")).map(|(k, v)| (k.clone(), v.clone())).collect();
     Ok((state, render(html)))
 }
 
@@ -164,6 +164,7 @@ pub fn event(live: &Live, id: u64, msg: &str) {
 fn run_on(live: &Live, session: &Mutex<Session>, event: Option<Value>) -> bool {
     let Ok(mut s) = session.lock() else { return false };
     let mut subj = s.state.clone();
+    subj.insert("time".into(), Value::Text(crate::serve::now_utc().into()));
     if let Some(e) = event {
         subj.insert("event".into(), e);
     }

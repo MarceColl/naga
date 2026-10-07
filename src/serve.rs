@@ -168,7 +168,7 @@ pub fn open(p: &Program, db: &std::path::Path) -> Result<(Store, Migration), Str
     Store::open(p, db).map_err(|e| e.msg)
 }
 
-fn error(msg: &str) -> String {
+pub fn error(msg: &str) -> String {
     format!("{{\"error\":{}}}", json_str(msg))
 }
 
@@ -266,7 +266,7 @@ fn text(d: &FieldDecl, s: &str) -> Value {
     }
 }
 
-fn reply(subj: &Rec) -> Result<(u16, String), String> {
+pub fn reply(subj: &Rec) -> Result<(u16, String), String> {
     let status = match subj.get("status") {
         Some(Value::Num(n)) if n.fract() == 0.0 && (100.0..600.0).contains(n) => *n as u16,
         Some(v) => return Err(format!("status must be a number from 100 to 599, got {}", v.show())),
@@ -277,7 +277,7 @@ fn reply(subj: &Rec) -> Result<(u16, String), String> {
 }
 
 /// `2026-10-06T21:03:00Z`, from days since the epoch to a civil date (Hinnant's algorithm).
-fn now_utc() -> String {
+pub fn now_utc() -> String {
     let s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
     let (days, secs) = (s.div_euclid(86400), s.rem_euclid(86400));
     let z = days + 719_468;

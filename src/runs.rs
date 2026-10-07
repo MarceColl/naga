@@ -3,7 +3,7 @@
 use crate::ast::*;
 use crate::eval::{Env, eval};
 use crate::machine::Status;
-use crate::serve::{Req, handle};
+use crate::serve::{Req, error, reply, request, run_word};
 use crate::store::Store;
 use crate::value::*;
 use indexmap::IndexMap;
@@ -71,6 +71,31 @@ fn wire(v: &Value) -> Value {
     from_json(&to_plain_json(v)).unwrap_or(Value::Nil)
 }
 
+/// Where a step of a run starts: the word it runs and the record it runs on. A request is
+/// read as `naga serve` reads it; `LIVE` mounts a page on its params; `EVENT` runs the page
+/// on the state its last step left (`page`), with the event.
+pub fn start(p: &Program, q: &Request, page: Option<&(Name, Rec)>) -> Result<(Name, Result<Rec, String>), String> {
+    let job = |routes: &[Route], (i, path, query): (usize, Pairs, Pairs), body: String| {
+        let r = &routes[i];
+        (r.word.clone(), request(r, &Req { route: i, path, query, body }))
+    };
+    match &*q.verb {
+        "LIVE" => Ok(job(&p.lives, p.live_for(&q.path).ok_or(format!("LIVE {} matches no live page", q.path))?, String::new())),
+        "EVENT" => {
+            let (word, state) = page.ok_or("an EVENT goes to the page mounted before it: start with LIVE /path")?;
+            let mut subj = state.clone();
+            subj.insert("time".into(), Value::Text(crate::serve::now_utc().into()));
+            subj.insert("event".into(), q.body.as_ref().map(literal).transpose()?.unwrap_or(Value::Nil));
+            Ok((word.clone(), Ok(subj)))
+        }
+        _ => {
+            let route = p.route_for(&q.verb, &q.path).ok_or(format!("{} {} matches no route", q.verb, q.path))?;
+            let body = q.body.as_ref().map(literal).transpose()?.map_or_else(String::new, |b| to_plain_json(&b));
+            Ok(job(&p.routes, route, body))
+        }
+    }
+}
+
 pub fn run(p: &Program, r: &Run) -> Outcome {
     let out = Outcome::default();
     let all: Vec<Name> = p.tables.keys().cloned().collect();
@@ -81,34 +106,65 @@ pub fn run(p: &Program, r: &Run) -> Outcome {
     };
     let mut out = Outcome { seed: store.snapshot(p).unwrap_or_default(), ..out };
     store.log.clear();
+    let mut page: Option<(Name, Rec)> = None;
     for q in &r.requests {
-        let Some((route, path, query)) = p.route_for(&q.verb, &q.path) else {
-            out = out.stop(Verdict::Error, format!("{} {} matches no route", q.verb, q.path));
-            break;
-        };
-        let (body, want) = match (q.body.as_ref().map(literal).transpose(), q.json.as_ref().map(literal).transpose()) {
-            (Ok(b), Ok(w)) => (b.map_or_else(String::new, |b| to_plain_json(&b)), w.map(|w| wire(&w))),
-            (Err(e), _) | (_, Err(e)) => {
+        let (word, subj) = match start(p, q, page.as_ref()) {
+            Ok(x) => x,
+            Err(e) => {
                 out = out.stop(Verdict::Error, e);
                 break;
             }
         };
-        let h = handle(p, &mut store, &Req { route, path, query, body });
-        out.sql.extend(h.sql);
-        out.said.push(format!("{} {}", h.status, h.json));
-        out.want.push(format!("{} {}", q.status, want.as_ref().map_or_else(|| "…".into(), to_plain_json)));
-        match h.stop {
-            Status::Hole => {
-                out = out.stop(Verdict::Waits, reason(&h.json));
+        let want = match q.json.as_ref().map(literal).transpose() {
+            Ok(w) => w,
+            Err(e) => {
+                out = out.stop(Verdict::Error, e);
                 break;
             }
-            _ if h.status == 500 => {
-                out = out.stop(Verdict::Error, reason(&h.json));
+        };
+        let ran = subj.map(|subj| run_word(p, &mut store, &word, subj));
+        if let Ok(ran) = &ran {
+            out.sql.extend(ran.sql.iter().cloned());
+            if ran.stop == Status::Hole {
+                out = out.stop(Verdict::Waits, ran.out.clone().err().unwrap_or_default());
                 break;
             }
-            _ => {}
         }
-        let same = h.status == q.status && want.is_none_or(|w| from_json(&h.json).is_some_and(|got| eqv(&got, &w)));
+        let same = if matches!(&*q.verb, "LIVE" | "EVENT") {
+            // a page's step: the state it left has what the run expects
+            let state = match ran.and_then(|r| r.out).and_then(|subj| crate::live::split(&subj)) {
+                Ok((state, _)) => state,
+                Err(e) => {
+                    out = out.stop(Verdict::Error, e);
+                    break;
+                }
+            };
+            out.said.push(show_rec(&state));
+            out.want.push(want.as_ref().map_or_else(|| "…".into(), Value::show));
+            let same = want.is_none_or(|w| subsumes(&w, &Value::Rec(state.clone().into())));
+            page = Some((word, state));
+            same
+        } else {
+            let (status, json) = match ran {
+                Err(msg) => (400, error(&msg)),
+                Ok(ran) => match ran.out.and_then(|subj| reply(&subj)) {
+                    Ok(x) => x,
+                    Err(msg) => {
+                        out = out.stop(Verdict::Error, msg);
+                        break;
+                    }
+                },
+            };
+            let want = want.map(|w| wire(&w));
+            out.said.push(format!("{status} {json}"));
+            if status == 500 {
+                out.want.push(format!("{} …", q.status));
+                out = out.stop(Verdict::Error, reason(&json));
+                break;
+            }
+            out.want.push(format!("{} {}", q.status, want.as_ref().map_or_else(|| "…".into(), to_plain_json)));
+            status == q.status && want.is_none_or(|w| from_json(&json).is_some_and(|got| eqv(&got, &w)))
+        };
         if !same {
             out.verdict = Verdict::Fail;
         }

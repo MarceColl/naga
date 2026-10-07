@@ -1,10 +1,10 @@
 //! Everything the editor knows, recomputed from the program text: steps and their ranges,
 //! definitions, holes, errors, the checker's shapes, and the runs.
-use naga::ast::{Clause, Pos, Program, Stmt, StmtKind};
-use naga::check::{Checked, Checker, Point};
-use naga::runs::{Outcome, run};
-use naga::syntax::parse;
-use naga::value::Name;
+use crate::ast::{Clause, Pos, Program, Stmt, StmtKind};
+use crate::check::{Checked, Checker, Point};
+use crate::runs::{Outcome, run};
+use crate::syntax::parse;
+use crate::value::Name;
 use std::collections::HashMap;
 
 /// A range of characters: from `pos` up to, not including, `end`. Lines are 1-based.
@@ -174,12 +174,12 @@ impl Analysis {
     }
 
     /// Every table's rows as seeded, even while the program doesn't parse.
-    pub fn seeded(&self) -> naga::runs::Tables {
+    pub fn seeded(&self) -> crate::runs::Tables {
         if let Some(r) = self.runs.first() {
             return r.seed.clone();
         }
         let all: Vec<Name> = self.program.tables.keys().cloned().collect();
-        let store = naga::store::Store::new(&self.program).ok().and_then(|mut s| s.seed(&self.program, &all).ok().map(|_| s));
+        let store = crate::store::Store::new(&self.program).ok().and_then(|mut s| s.seed(&self.program, &all).ok().map(|_| s));
         store.and_then(|mut s| s.snapshot(&self.program).ok()).unwrap_or_default()
     }
 
@@ -201,7 +201,7 @@ impl Analysis {
     }
 
     pub fn passing(&self) -> usize {
-        self.runs.iter().filter(|r| r.verdict == naga::runs::Verdict::Pass).count()
+        self.runs.iter().filter(|r| r.verdict == crate::runs::Verdict::Pass).count()
     }
 }
 

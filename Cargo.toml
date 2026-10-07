@@ -5,15 +5,19 @@ edition = "2024"
 
 [dependencies]
 axum = "0.8"
+glyphon = "0.12"
 indexmap = "2.14.2"
+png = "0.18"
+pollster = "0.4"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 ryu-js = "1.0.3"
+serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros"] }
 unicode-general-category = "1.1.0"
+ureq = { version = "3", features = ["json"] }
+wgpu = "30"
+winit = "0.30"
 
 [dev-dependencies]
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
-
-[workspace]
-members = [".", "editor"]

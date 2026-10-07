@@ -1,7 +1,7 @@
 //! Draws a `Frame`: a pass of solid rectangles (backgrounds, selection, holes, error
 //! underlines, the bar's rule), then the text with glyphon. It also answers which target sits
 //! under a point, since only it knows where the text went.
-use crate::view::{Color, Frame, Line, Style, Target, palette};
+use crate::editor::view::{Color, Frame, Line, Style, Target, palette};
 use glyphon::{
     Attrs, Buffer, Cache, Family, FontSystem, Metrics, Resolution, Shaping, Stretch, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
     Viewport, Weight, Wrap,
@@ -11,11 +11,11 @@ use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 const FONTS: [&[u8]; 5] = [
-    include_bytes!("../fonts/MartianMono-sWdMd.ttf"),
-    include_bytes!("../fonts/MartianMono-sWdBd.ttf"),
-    include_bytes!("../fonts/MartianMono-sWdxBd.ttf"),
-    include_bytes!("../fonts/MartianMono-StdMd.ttf"),
-    include_bytes!("../fonts/MartianMono-StdxBd.ttf"),
+    include_bytes!("../../fonts/MartianMono-sWdMd.ttf"),
+    include_bytes!("../../fonts/MartianMono-sWdBd.ttf"),
+    include_bytes!("../../fonts/MartianMono-sWdxBd.ttf"),
+    include_bytes!("../../fonts/MartianMono-StdMd.ttf"),
+    include_bytes!("../../fonts/MartianMono-StdxBd.ttf"),
 ];
 
 const SHADER: &str = r#"

@@ -77,8 +77,8 @@ pub fn ask(prompt: &str) -> Result<Fill, String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis::Analysis;
-    use crate::{agent, ops};
+    use crate::editor::analysis::Analysis;
+    use crate::editor::{agent, ops};
 
     /// One real request: `ANTHROPIC_API_KEY=… cargo test -p naga-editor -- --ignored live`
     #[test]

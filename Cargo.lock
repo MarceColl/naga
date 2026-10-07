@@ -1319,13 +1319,20 @@ name = "naga"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "glyphon",
  "http-body-util",
  "indexmap",
+ "png",
+ "pollster",
  "rusqlite",
  "ryu-js",
+ "serde_json",
  "tokio",
  "tower",
  "unicode-general-category",
+ "ureq",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]
@@ -1352,20 +1359,6 @@ dependencies = [
  "spirv",
  "thiserror 2.0.21",
  "unicode-ident",
-]
-
-[[package]]
-name = "naga-editor"
-version = "0.1.0"
-dependencies = [
- "glyphon",
- "naga 0.1.0",
- "png",
- "pollster",
- "serde_json",
- "ureq",
- "wgpu",
- "winit",
 ]
 
 [[package]]

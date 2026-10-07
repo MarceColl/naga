@@ -334,7 +334,7 @@ impl Route {
             match seg {
                 Seg::Lit(l) if l == part => {}
                 Seg::Lit(_) => return None,
-                Seg::Param(d) => out.push((d.name.to_string(), part.to_string())),
+                Seg::Param(d) => out.push((d.name.to_string(), decode(part, false))),
             }
         }
         Some(out)
@@ -349,6 +349,30 @@ impl Route {
     pub fn params(&self) -> impl Iterator<Item = &FieldDecl> {
         self.path_params().chain(&self.query)
     }
+}
+
+/// `%xx` escapes as their bytes; in a query, `+` is a space too.
+fn decode(s: &str, query: bool) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        match b[i] {
+            b'%' if i + 2 < b.len() => match (hex(b[i + 1]), hex(b[i + 2])) {
+                (Some(h), Some(l)) => {
+                    out.push((h * 16 + l) as u8);
+                    i += 3;
+                    continue;
+                }
+                _ => out.push(b'%'),
+            },
+            b'+' if query => out.push(b' '),
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// One request of a run: `VERB /path?query [body] → status [json]`.
@@ -375,7 +399,7 @@ impl Program {
     /// The route that answers `verb path`, with the path's params and its query.
     pub fn route_for(&self, verb: &str, path: &str) -> Option<(usize, Pairs, Pairs)> {
         let (path, query) = path.split_once('?').unwrap_or((path, ""));
-        let query: Pairs = query.split('&').filter(|q| !q.is_empty()).map(|q| q.split_once('=').unwrap_or((q, ""))).map(|(k, v)| (k.into(), v.into())).collect();
+        let query: Pairs = query.split('&').filter(|q| !q.is_empty()).map(|q| q.split_once('=').unwrap_or((q, ""))).map(|(k, v)| (decode(k, true), decode(v, true))).collect();
         self.routes.iter().enumerate().filter(|(_, r)| &*r.verb == verb).find_map(|(i, r)| Some((i, r.bind(path)?, query.clone())))
     }
 }

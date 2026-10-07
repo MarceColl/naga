@@ -1,8 +1,8 @@
 //! Handing a hole to Claude: what it's told, and how its fill is judged. A fill is kept when
 //! it parses, adds no checker error and breaks no run that worked before.
-use crate::analysis::{Analysis, Step};
-use crate::claude::Fill;
-use naga::runs::Verdict;
+use crate::editor::analysis::{Analysis, Step};
+use crate::editor::claude::Fill;
+use crate::runs::Verdict;
 use std::rc::Rc;
 
 pub const TRIES: usize = 3;

@@ -1,13 +1,13 @@
 //! The screen as data: what to draw, in which colours, and what each piece of text points at.
 //! colorForth-style: one screen of code on black, colour as meaning, one status line at the bottom.
-use crate::analysis::{Analysis, Range, Step};
-use crate::state::{Data, Edit, Mode, OPS, Sel, State, Tone};
-use naga::ast::ColType;
-use naga::runs::Verdict;
-use crate::debug::Debug;
-use naga::machine::{self, Frame as MFrame, Status};
-use naga::value::{Value, eqv, show_rec};
-use naga::value::Name;
+use crate::editor::analysis::{Analysis, Range, Step};
+use crate::editor::state::{Data, Edit, Mode, OPS, Sel, State, Tone};
+use crate::ast::ColType;
+use crate::runs::Verdict;
+use crate::editor::debug::Debug;
+use crate::machine::{self, Frame as MFrame, Status};
+use crate::value::{Value, eqv, show_rec};
+use crate::value::Name;
 
 pub type Color = [u8; 3];
 
@@ -285,7 +285,7 @@ pub fn view(st: &State) -> Frame {
         let typing = st.agent.as_ref().and_then(|a| {
             let h = an.step(a.hole).filter(|h| h.range.pos.line == ln)?;
             let text: Vec<char> = a.fill.as_ref().map_or(vec![], |f| f.text().chars().take(a.shown).collect());
-            let range = Range { pos: h.range.pos, end: naga::ast::Pos { line: ln, col: chars.len() } };
+            let range = Range { pos: h.range.pos, end: crate::ast::Pos { line: ln, col: chars.len() } };
             Some(Edit { range, cursor: text.len(), text, rework: false, hole: Some(h.id) })
         });
         if let Some(e) = typing {
@@ -541,7 +541,7 @@ fn sig_text(an: &Analysis, name: &str) -> Option<Vec<String>> {
 fn shapes_at(an: &Analysis, s: &Step) -> (Vec<String>, Vec<String>) {
     let Some(c) = &an.checked else { return (vec![], vec![]) };
     let k = (s.range.pos.line, s.range.pos.col);
-    (crate::analysis::best(c.before.get(&k)), crate::analysis::best(c.after.get(&k)))
+    (crate::editor::analysis::best(c.before.get(&k)), crate::editor::analysis::best(c.after.get(&k)))
 }
 
 /// `HOLES n · ERRORS n · RUNS p/t`, in red where something needs doing.
@@ -553,6 +553,13 @@ fn stat(st: &State, f: &mut Frame) {
     f.stat.push(" · ", dim, None);
     f.stat.push(&format!("ERRORS {errs}"), if errs > 0 { Style::plain(ERR) } else { dim }, None);
     f.stat.push(&format!(" · RUNS {}/{}", an.passing(), an.runs.len()), dim, None);
+    if let Some((port, last)) = &st.live {
+        f.stat.push(" · ", dim, None);
+        f.stat.push(&format!("LIVE :{port}"), Style::plain(CALL), None);
+        if let Some(l) = last {
+            f.stat.push(&format!(" {}", upper(l)), dim, None);
+        }
+    }
 }
 
 fn bar(st: &State, f: &mut Frame) {

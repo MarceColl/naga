@@ -8,9 +8,7 @@ use crate::store::Store;
 use crate::syntax::parse;
 use crate::value::*;
 use axum::Router;
-use axum::extract::{Path, Query};
 use axum::http::{StatusCode, header};
-use axum::routing::{MethodFilter, on};
 use std::rc::Rc;
 use std::sync::mpsc;
 use tokio::sync::oneshot;
@@ -34,15 +32,51 @@ pub struct Handled {
     pub sql: Vec<String>,
 }
 
-struct Job {
-    req: Req,
-    reply: oneshot::Sender<(u16, String)>,
+/// An HTTP request as text, before any route is chosen.
+pub struct Raw {
+    pub method: String,
+    pub path: String,
+    pub query: String,
+    pub body: String,
 }
 
-/// Parses `src`, opens the store at `db` (creating and seeding new tables) and starts the
-/// interpreter. The router forwards every declared route to it.
+/// Where a request's answer goes: a status and JSON text.
+pub type Reply = oneshot::Sender<(u16, String)>;
+
+/// The server: every request goes, as text, to `send`, whose owner holds the program and
+/// answers through the `Reply`. Routes live in the program, so they can change while it runs.
+pub fn router(send: impl Fn(Raw, Reply) + Clone + Send + Sync + 'static) -> Router {
+    Router::new().fallback(move |method: axum::http::Method, uri: axum::http::Uri, body: String| {
+        let send = send.clone();
+        async move {
+            let (reply, answer) = oneshot::channel();
+            send(Raw { method: method.to_string(), path: uri.path().into(), query: uri.query().unwrap_or("").into(), body }, reply);
+            let (status, json) = answer.await.unwrap_or_else(|_| (500, error("the program stopped")));
+            (StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), [(header::CONTENT_TYPE, "application/json")], json)
+        }
+    })
+}
+
+/// Answers a request with the program: its route's word, or the list of routes at `GET /`
+/// (unless the program answers it), or a 404 or 405 naming the routes there are.
+pub fn respond(p: &Program, store: &mut Store, raw: &Raw) -> Handled {
+    let full = if raw.query.is_empty() { raw.path.clone() } else { format!("{}?{}", raw.path, raw.query) };
+    if let Some((route, path, query)) = p.route_for(&raw.method, &full) {
+        return handle(p, store, &Req { route, path, query, body: raw.body.clone() });
+    }
+    let listing = format!("[{}]", p.routes.iter().map(|r| json_str(&r.decl())).collect::<Vec<_>>().join(","));
+    let (status, json) = match (raw.method.as_str(), raw.path.as_str()) {
+        ("GET", "/") => (200, format!("{{\"routes\":{listing}}}")),
+        _ if p.routes.iter().any(|r| r.bind(&raw.path).is_some()) => (405, error(&format!("{} {} isn't a route; the path takes other verbs", raw.method, raw.path))),
+        _ => (404, format!("{{\"error\":{},\"routes\":{listing}}}", json_str(&format!("no route {} {}", raw.method, raw.path)))),
+    };
+    Handled { status, json, stop: Status::Done, said: vec![], sql: vec![] }
+}
+
+/// `naga serve`: parses `src`, opens the store at `db` (creating and seeding new tables) and
+/// runs every request on one interpreter thread.
 pub fn start(src: String, db: std::path::PathBuf) -> Result<Router, String> {
-    let (tx, rx) = mpsc::channel::<Job>();
+    let (tx, rx) = mpsc::channel::<(Raw, Reply)>();
     let (ready_tx, ready_rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("naga".into())
@@ -53,57 +87,21 @@ pub fn start(src: String, db: std::path::PathBuf) -> Result<Router, String> {
                 Ok(s) => s,
                 Err(e) => return drop(ready_tx.send(Err(e))),
             };
-            let routes: Vec<(String, String, String)> = p.routes.iter().map(|r| (r.verb.to_string(), r.pattern(), r.decl())).collect();
-            let _ = ready_tx.send(Ok(routes));
-            for job in rx {
-                let h = handle(&p, &mut store, &job.req);
-                let r = &p.routes[job.req.route];
+            let _ = ready_tx.send(Ok(()));
+            for (raw, reply) in rx {
+                let h = respond(&p, &mut store, &raw);
                 for l in &h.said {
-                    println!("{} {} > {l}", r.verb, r.path);
+                    println!("{} {} > {l}", raw.method, raw.path);
                 }
-                let _ = job.reply.send((h.status, h.json));
+                let _ = reply.send((h.status, h.json));
             }
         })
         .map_err(|e| e.to_string())?;
-    let routes = ready_rx.recv().map_err(|_| "the interpreter stopped while starting".to_string())??;
-    let listing = format!("[{}]", routes.iter().map(|(_, _, decl)| json_str(decl)).collect::<Vec<_>>().join(","));
-    let has_root = routes.iter().any(|(verb, pattern, _)| verb == "GET" && pattern == "/");
-    let app = routes.into_iter().enumerate().fold(Router::new(), |app, (route, (verb, pattern, _))| {
-        let tx = tx.clone();
-        let handler = move |Path(path): Path<Pairs>, Query(query): Query<Pairs>, body: String| async move {
-            let (reply, answer) = oneshot::channel();
-            let sent = tx.send(Job { req: Req { route, path, query, body }, reply }).is_ok();
-            let (status, json) = match sent {
-                true => answer.await.unwrap_or_else(|_| (500, error("the interpreter stopped"))),
-                false => (500, error("the interpreter stopped")),
-            };
-            respond(status, json)
-        };
-        app.route(&pattern, on(filter(&verb), handler))
-    });
-    // the server describes itself: GET / lists the routes, unless the program answers it
-    let index = format!("{{\"routes\":{listing}}}");
-    let app = if has_root { app } else { app.route("/", axum::routing::get(move || async move { respond(200, index) })) };
-    Ok(app.fallback(move |method: axum::http::Method, uri: axum::http::Uri| async move {
-        respond(404, format!("{{\"error\":{},\"routes\":{listing}}}", json_str(&format!("no route {method} {}", uri.path()))))
-    }))
+    ready_rx.recv().map_err(|_| "the interpreter stopped while starting".to_string())??;
+    Ok(router(move |raw, reply| drop(tx.send((raw, reply)))))
 }
 
-fn respond(status: u16, json: String) -> impl axum::response::IntoResponse {
-    (StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), [(header::CONTENT_TYPE, "application/json")], json)
-}
-
-fn filter(verb: &str) -> MethodFilter {
-    match verb {
-        "GET" => MethodFilter::GET,
-        "POST" => MethodFilter::POST,
-        "PUT" => MethodFilter::PUT,
-        "PATCH" => MethodFilter::PATCH,
-        _ => MethodFilter::DELETE,
-    }
-}
-
-fn open(p: &Program, db: &std::path::Path) -> Result<Store, String> {
+pub fn open(p: &Program, db: &std::path::Path) -> Result<Store, String> {
     if !p.errors.is_empty() {
         return Err(p.errors.iter().map(|e| format!("parse {}:{} {}", e.line, e.col, e.msg)).collect::<Vec<_>>().join("\n"));
     }

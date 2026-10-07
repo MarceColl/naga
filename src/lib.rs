@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod check;
+pub mod editor;
 pub mod eval;
 pub mod machine;
 pub mod num;

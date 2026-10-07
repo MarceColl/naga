@@ -1,13 +1,13 @@
 //! The editor's state and the one function that changes it. `update` takes a state and an
 //! event and returns the next state; the program text inside the analysis is the only data,
 //! and undo is a stack of earlier texts.
-use crate::analysis::{Analysis, Parent, Range, Step};
-use crate::agent::{self, Agent};
-use crate::claude::Fill;
-use crate::debug::{self, Debug, Move};
-use crate::ops;
-use crate::view::Target;
-use naga::value::Name;
+use crate::editor::analysis::{Analysis, Parent, Range, Step};
+use crate::editor::agent::{self, Agent};
+use crate::editor::claude::Fill;
+use crate::editor::debug::{self, Debug, Move};
+use crate::editor::ops;
+use crate::editor::view::Target;
+use crate::value::Name;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +76,8 @@ pub enum Event {
     AgentReply(u64, Result<Fill, String>),
     /// Time passes: the agent types a little more of its fill.
     Tick,
+    /// The live server answered a request: `GET /accounts/1 → 200`.
+    Served(String),
 }
 
 /// A table's rows, as seeded (`run: None`) or after a run.
@@ -94,6 +96,8 @@ pub struct State {
     /// A question for Claude, waiting to be sent: the agent's id and the prompt.
     pub ask: Option<(u64, String)>,
     pub agents: u64,
+    /// The live server's port and the last request it answered.
+    pub live: Option<(u16, Option<String>)>,
     pub undo: Vec<String>,
     pub sel: Option<Sel>,
     /// Where a shift-extended selection started.
@@ -120,6 +124,7 @@ impl State {
             agent: None,
             ask: None,
             agents: 0,
+            live: None,
             undo: vec![],
             sel: None,
             anchor: None,
@@ -201,7 +206,7 @@ fn one(s: &Step) -> (Option<Sel>, Option<usize>) {
 /// Writing a hole's fill, from the hole to the end of its line.
 fn edit_hole(st: State, h: &Step) -> State {
     let line = h.range.pos.line;
-    let range = Range { pos: h.range.pos, end: naga::ast::Pos { line, col: st.an.lines[line - 1].len() } };
+    let range = Range { pos: h.range.pos, end: crate::ast::Pos { line, col: st.an.lines[line - 1].len() } };
     let e = Edit { range, text: vec![], cursor: 0, rework: false, hole: Some(h.id) };
     State { mode: Mode::Edit(e), sel: None, ..st }.say("write the fill · enter keeps it · shift-enter for a new line · esc leaves the hole", Tone::Cmd)
 }
@@ -316,7 +321,7 @@ fn agent_event(st: State, mut a: Agent, ev: Event) -> State {
                 Err(why) => give_up(st, a, &why),
             }
         }
-        Event::Viewport(..) | Event::Scroll(_) | Event::Hover(..) => {
+        Event::Viewport(..) | Event::Scroll(_) | Event::Hover(..) | Event::Served(_) => {
             let st = update(State { agent: None, ..st }, ev);
             State { agent: Some(a), ..st }
         }
@@ -342,6 +347,7 @@ pub fn update(st: State, ev: Event) -> State {
     }
     match (&st.mode, ev) {
         (_, Event::AgentReply(..) | Event::Tick) => st,
+        (_, Event::Served(line)) => State { live: st.live.map(|(port, _)| (port, Some(line))), ..st },
         (_, Event::Viewport(rows, lines)) => State { rows, row_lines: Rc::new(lines), ..st },
         (Mode::Idle, ev) if st.debug.is_some() && !matches!(ev, Event::Scroll(_)) => {
             let d = st.debug.clone().unwrap();
@@ -479,7 +485,7 @@ fn run(st: State, raw: &str) -> State {
         "debug" | "run" => {
             let i = match arg.parse::<usize>() {
                 Ok(n) => n.wrapping_sub(1),
-                Err(_) => an.runs.iter().position(|r| r.verdict != naga::runs::Verdict::Pass).unwrap_or(0),
+                Err(_) => an.runs.iter().position(|r| r.verdict != crate::runs::Verdict::Pass).unwrap_or(0),
             };
             start_debug(st, i)
         }
@@ -717,12 +723,12 @@ mod tests {
         assert_eq!(line(&st), Some((3, 12)), "back: a's last step");
         let st = keys(st, &[(Key::Home, false), (Key::Right, false), (Key::Right, false)]);
         assert_eq!(line(&st), Some((3, 4)), "from the start, into a");
-        let b = st.an.steps.iter().find(|s| s.range.pos == naga::ast::Pos { line: 4, col: 4 }).unwrap().id;
+        let b = st.an.steps.iter().find(|s| s.range.pos == crate::ast::Pos { line: 4, col: 4 }).unwrap().id;
         let st = update(st, Event::Press(Some(Target::Step(b)), false));
         let st = keys(st, &[(Key::Home, false), (Key::Enter, false)]);
         assert_eq!(line(&st), Some((4, 4)), "continue stops at the breakpoint in b");
         let st = keys(st, &[(Key::Enter, false)]);
-        assert_eq!(st.debug.as_ref().map(|d| d.now().st.status), Some(naga::machine::Status::Done));
+        assert_eq!(st.debug.as_ref().map(|d| d.now().st.status), Some(crate::machine::Status::Done));
         assert!(keys(st, &[(Key::Escape, false)]).debug.is_none());
     }
 

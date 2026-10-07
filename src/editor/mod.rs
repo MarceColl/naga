@@ -1,4 +1,4 @@
-//! `naga-edit file.nag`: the hole editor, drawn on the GPU.
+//! The editor: the program drawn on the GPU, edited live.
 mod agent;
 mod analysis;
 mod claude;
@@ -20,10 +20,14 @@ use winit::window::{Window, WindowId};
 /// What other threads wake the editor with: Claude's answer to an agent.
 enum Wake {
     Reply(u64, Result<claude::Fill, String>),
+    /// A request for the live server, answered on this thread with the editor's program.
+    Request(crate::serve::Raw, crate::serve::Reply),
 }
 
 struct App {
     proxy: EventLoopProxy<Wake>,
+    /// The live server's tables, when the editor is serving.
+    store: Option<crate::store::Store>,
     state: Option<State>,
     frame: Frame,
     gpu: Option<gpu::Gpu>,
@@ -49,7 +53,7 @@ impl App {
         if before.is_some_and(|b| b.text != next.an.text)
             && let Err(e) = std::fs::write(&self.path, &next.an.text)
         {
-            eprintln!("naga-edit: {}: {e}", self.path);
+            eprintln!("naga: {}: {e}", self.path);
         }
         self.frame = view(&next);
         self.state = Some(next);
@@ -64,8 +68,16 @@ impl App {
 
 impl ApplicationHandler<Wake> for App {
     fn user_event(&mut self, _: &ActiveEventLoop, w: Wake) {
-        let Wake::Reply(id, r) = w;
-        self.send(Event::AgentReply(id, r));
+        match w {
+            Wake::Reply(id, r) => self.send(Event::AgentReply(id, r)),
+            Wake::Request(raw, reply) => {
+                let (Some(st), Some(store)) = (&self.state, &mut self.store) else { return };
+                let h = crate::serve::respond(&st.an.program, store, &raw);
+                let line = format!("{} {}{} → {}", raw.method, raw.path, if raw.query.is_empty() { String::new() } else { format!("?{}", raw.query) }, h.status);
+                let _ = reply.send((h.status, h.json));
+                self.send(Event::Served(line));
+            }
+        }
     }
 
     /// While the agent types its fill, time moves in 60ths of a second.
@@ -174,8 +186,6 @@ impl ApplicationHandler<Wake> for App {
     }
 }
 
-const USAGE: &str = "usage: naga-edit <file.nag> [--shot out.png [--keys right,shift+right,down,enter,esc] [--type text] [--click line:col] [--scroll lines] [--size 1280x860]]";
-
 fn key(name: &str) -> Option<(Key, bool)> {
     let (shift, k) = name.strip_prefix("shift+").map_or((false, name), |k| (true, k));
     let k = match k {
@@ -221,7 +231,7 @@ fn shot(state: State, out: &str, opts: &std::collections::HashMap<&str, &str>) -
         st = update(st, Event::Key(Key::Char(c), false));
     }
     for k in opts.get("--keys").map_or(vec![], |k| k.split(',').collect()) {
-        let (k, shift) = key(k).ok_or(format!("naga-edit: unknown key {k}"))?;
+        let (k, shift) = key(k).ok_or(format!("naga: unknown key {k}"))?;
         st = update(st, Event::Key(k, shift));
     }
     let f = view(&st);
@@ -229,27 +239,42 @@ fn shot(state: State, out: &str, opts: &std::collections::HashMap<&str, &str>) -
     g.save(out)
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(path) = args.first().cloned() else {
-        eprintln!("{USAGE}");
-        std::process::exit(1);
-    };
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        eprintln!("naga-edit: {path}: {e}");
-        std::process::exit(1);
-    });
+/// Opens `path` in the editor. With `--shot out.png` among `args`, draws one frame offscreen
+/// instead, after replaying `--keys`, `--type`, `--click` and `--scroll`.
+pub fn edit(path: &str, args: &[String]) -> Result<(), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("naga: {path}: {e}"))?;
     let state = State::new(&text);
-    let opts: std::collections::HashMap<&str, &str> = args[1..].chunks(2).filter_map(|p| Some((p[0].as_str(), p.get(1)?.as_str()))).collect();
+    let opts: std::collections::HashMap<&str, &str> = args.chunks(2).filter_map(|p| Some((p[0].as_str(), p.get(1)?.as_str()))).collect();
     if let Some(out) = opts.get("--shot") {
-        if let Err(e) = shot(state, out, &opts) {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-        return;
+        return shot(state, out, &opts);
     }
     let frame = view(&state);
-    let el = EventLoop::<Wake>::with_user_event().build().expect("an event loop");
-    let mut app = App { proxy: el.create_proxy(), state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path };
-    el.run_app(&mut app).expect("the editor runs");
+    let el = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
+    let mut app = App { proxy: el.create_proxy(), store: None, state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into() };
+    el.run_app(&mut app).map_err(|e| e.to_string())
+}
+
+/// `naga start`: the editor, serving the program it edits on `port`. Requests run on the
+/// editor's thread, on the program as it is at that moment, against the tables in `db`.
+pub fn start(path: &str, port: u16) -> Result<(), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("naga: {path}: {e}"))?;
+    let mut state = State::new(&text);
+    let db = std::path::Path::new(path).with_extension("db");
+    let store = crate::serve::open(&state.an.program, &db)?;
+    let el = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
+    let proxy = el.create_proxy();
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("naga: port {port}: {e}"))?;
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("a runtime");
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::from_std(listener).expect("the listener");
+            let app = crate::serve::router(move |raw, reply| drop(proxy.send_event(Wake::Request(raw, reply))));
+            let _ = axum::serve(listener, app).await;
+        });
+    });
+    state.live = Some((port, None));
+    let frame = view(&state);
+    let mut app = App { proxy: el.create_proxy(), store: Some(store), state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into() };
+    el.run_app(&mut app).map_err(|e| e.to_string())
 }

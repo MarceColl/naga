@@ -1,8 +1,8 @@
 //! Keyword operations over selected steps. Each takes the analysis and returns the program's
 //! new text, or a message saying why it can't.
-use crate::analysis::{Analysis, Range, Step};
-use naga::ast::Pos;
-use naga::syntax::strip_comment;
+use crate::editor::analysis::{Analysis, Range, Step};
+use crate::ast::Pos;
+use crate::syntax::strip_comment;
 
 pub type R<T = String> = Result<T, String>;
 
@@ -210,7 +210,7 @@ pub fn fill(an: &Analysis, hole: &Step, code: &str, helpers: Option<&str>) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::Analysis;
+    use crate::editor::analysis::Analysis;
 
     const SRC: &str = "go = a b c\n\na = +{x: 1}\nb = nop\nc = nop\nhole = ? fill me\n";
 

@@ -1,10 +1,10 @@
 //! A run, recorded once and then stepped through: every machine state of every request, in
-//! order, against one freshly seeded store, as `naga::runs` sends them.
-use crate::analysis::{Analysis, Range};
-use naga::machine::{self, Runtime, Status};
-use naga::serve::{Req, request};
-use naga::store::Store;
-use naga::value::Name;
+//! order, against one freshly seeded store, as `crate::runs` sends them.
+use crate::editor::analysis::{Analysis, Range};
+use crate::machine::{self, Runtime, Status};
+use crate::serve::{Req, request};
+use crate::store::Store;
+use crate::value::Name;
 use std::rc::Rc;
 
 const BUDGET: usize = 50_000;
@@ -49,8 +49,8 @@ pub fn record(an: &Analysis, run: usize, bps: Vec<usize>) -> Result<Debug, Strin
     for (i, q) in r.requests.iter().enumerate() {
         reqs.push(format!("{} {}", q.verb, q.path));
         let Some((route, path, query)) = p.route_for(&q.verb, &q.path) else { continue };
-        let lit = |e: &naga::ast::Expr| naga::eval::eval(e, &naga::eval::Env { subj: &Default::default(), now: 0.0, outer: &[] });
-        let body = q.body.as_ref().and_then(|b| lit(b).ok()).map_or_else(String::new, |b| naga::value::to_plain_json(&b));
+        let lit = |e: &crate::ast::Expr| crate::eval::eval(e, &crate::eval::Env { subj: &Default::default(), now: 0.0, outer: &[] });
+        let body = q.body.as_ref().and_then(|b| lit(b).ok()).map_or_else(String::new, |b| crate::value::to_plain_json(&b));
         let Ok(subj) = request(&p.routes[route], &Req { route, path, query, body }) else { continue };
         let mut s = machine::initial(p, &p.routes[route].word, Rc::new(subj));
         let mut rt = Runtime { log: &mut log, store: Some(&mut store), store_error: None };

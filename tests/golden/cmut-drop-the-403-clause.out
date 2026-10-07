@@ -1,27 +1,27 @@
 run error after 126 steps: events has no column conflict (it has id, key, customer-id, metric, qty) @57
-> 201  {id: 1, name: "Ana", email: "ana@x.com", plan: Free, state: Active}
-> 200  {id: 1, name: "Ana", email: "ana@ana.dev", plan: Free, state: Active}
-> 200  {id: 1, name: "Ana", email: "ana@ana.dev", plan: Pro, state: Paused}
-> 200  {id: 1, name: "Ana", email: "ana@ana.dev", plan: Free, state: Active}
-> 201  {id: 1, key: "k1", customer-id: 1, metric: Api, qty: 120}
-> 200  {id: 1, key: "k1", customer-id: 1, metric: Api, qty: 120}
-> 409  {key: {agree: "k1"}, metric: {agree: Api}, qty: {differ: {left: 999, right: 120}}, customer-id: {agree: 1}}
-subj {auth: {customer-id: 1}, event: {key: "k2", customer-id: 2, metric: Api, qty: 5, conflict: {customer-id: {left: 2, right: 1}}}, events: []}
+> 201  {id: 1, name: "Ana", email: "ana@x.com", plan: :free, state: :active}
+> 200  {id: 1, name: "Ana", email: "ana@ana.dev", plan: :free, state: :active}
+> 200  {id: 1, name: "Ana", email: "ana@ana.dev", plan: :pro, state: :paused}
+> 200  {id: 1, name: "Ana", email: "ana@ana.dev", plan: :free, state: :active}
+> 201  {id: 1, key: "k1", customer-id: 1, metric: :api, qty: 120}
+> 200  {id: 1, key: "k1", customer-id: 1, metric: :api, qty: 120}
+> 409  {key: {agree: "k1"}, metric: {agree: :api}, qty: {differ: {left: 999, right: 120}}, customer-id: {agree: 1}}
+subj {auth: {customer-id: 1}, event: {key: "k2", customer-id: 2, metric: :api, qty: 5, conflict: {customer-id: {left: 2, right: 1}}}, events: []}
 pause error
 sql [-1] CREATE TABLE "customers" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL, "email" TEXT NOT NULL, "plan" TEXT NOT NULL, "state" TEXT NOT NULL)
 sql [-1] CREATE TABLE "revisions" ("id" INTEGER PRIMARY KEY, "customer-id" INTEGER NOT NULL, "at" TEXT NOT NULL, "change" TEXT NOT NULL)
 sql [-1] CREATE TABLE "events" ("id" INTEGER PRIMARY KEY, "key" TEXT NOT NULL, "customer-id" INTEGER NOT NULL, "metric" TEXT NOT NULL, "qty" REAL NOT NULL)
-sql [6] INSERT INTO "customers" ("name", "email", "plan", "state") VALUES ('Ana', 'ana@x.com', 'Free', 'Active')
-sql [10] INSERT INTO "revisions" ("customer-id", "at", "change") VALUES (1, '2026-10-01', '{"id":{"add":1},"name":{"add":"Ana"},"email":{"add":"ana@x.com"},"plan":{"add":{"$sym":"Free"}},"state":{"add":{"$sym":"Active"}}}')
+sql [6] INSERT INTO "customers" ("name", "email", "plan", "state") VALUES ('Ana', 'ana@x.com', 'free', 'active')
+sql [10] INSERT INTO "revisions" ("customer-id", "at", "change") VALUES (1, '2026-10-01', '{"id":{"add":1},"name":{"add":"Ana"},"email":{"add":"ana@x.com"},"plan":{"add":{"$sym":"free"}},"state":{"add":{"$sym":"active"}}}')
 sql [20] SELECT * FROM "customers" WHERE "id" = 1
 sql [25] UPDATE "customers" SET "email" = 'ana@ana.dev' WHERE "id" = 1
-sql [29] INSERT INTO "revisions" ("customer-id", "at", "change") VALUES (1, '2026-10-03', '{"id":{"same":1},"name":{"same":"Ana"},"email":{"set":"ana@ana.dev","was":"ana@x.com"},"plan":{"same":{"$sym":"Free"}},"state":{"same":{"$sym":"Active"}}}')
+sql [29] INSERT INTO "revisions" ("customer-id", "at", "change") VALUES (1, '2026-10-03', '{"id":{"same":1},"name":{"same":"Ana"},"email":{"set":"ana@ana.dev","was":"ana@x.com"},"plan":{"same":{"$sym":"free"}},"state":{"same":{"$sym":"active"}}}')
 sql [39] SELECT * FROM "customers" WHERE "id" = 1
-sql [44] UPDATE "customers" SET "plan" = 'Pro', "state" = 'Paused' WHERE "id" = 1
-sql [48] INSERT INTO "revisions" ("customer-id", "at", "change") VALUES (1, '2026-10-05', '{"id":{"same":1},"name":{"same":"Ana"},"email":{"same":"ana@ana.dev"},"plan":{"set":{"$sym":"Pro"},"was":{"$sym":"Free"}},"state":{"set":{"$sym":"Paused"},"was":{"$sym":"Active"}}}')
+sql [44] UPDATE "customers" SET "plan" = 'pro', "state" = 'paused' WHERE "id" = 1
+sql [48] INSERT INTO "revisions" ("customer-id", "at", "change") VALUES (1, '2026-10-05', '{"id":{"same":1},"name":{"same":"Ana"},"email":{"same":"ana@ana.dev"},"plan":{"set":{"$sym":"pro"},"was":{"$sym":"free"}},"state":{"set":{"$sym":"paused"},"was":{"$sym":"active"}}}')
 sql [58] SELECT * FROM "revisions" WHERE (("customer-id" = 1) AND ("at" <= '2026-10-04')) ORDER BY "id"
 sql [80] SELECT * FROM "events" WHERE ("key" = 'k1') ORDER BY "id"
-sql [82] INSERT INTO "events" ("key", "metric", "qty", "customer-id") VALUES ('k1', 'Api', 120, 1)
+sql [82] INSERT INTO "events" ("key", "metric", "qty", "customer-id") VALUES ('k1', 'api', 120, 1)
 sql [95] SELECT * FROM "events" WHERE ("key" = 'k1') ORDER BY "id"
 sql [109] SELECT * FROM "events" WHERE ("key" = 'k1') ORDER BY "id"
 sql [123] SELECT * FROM "events" WHERE ("key" = 'k2') ORDER BY "id"

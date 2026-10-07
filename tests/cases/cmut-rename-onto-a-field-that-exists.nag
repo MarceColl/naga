@@ -7,21 +7,21 @@ table customers :: {name: Text, email: Text, plan: Const, state: Const}
 table revisions :: {customer-id: Int, at: Text, change: Json}
 table events    :: {key: Text, customer-id: Int, metric: Const, qty: Num}
 
-main = (+{time: "2026-10-01", body: {name: "Ana", email: "ana@x.com", plan: Free}} post-customer show-reply)
+main = (+{time: "2026-10-01", body: {name: "Ana", email: "ana@x.com", plan: :free}} post-customer show-reply)
        (+{time: "2026-10-03", id: 1, body: {email: "ana@ana.dev"}} patch-customer show-reply)
-       (+{time: "2026-10-05", id: 1, body: {plan: Pro, state: Paused, shoe-size: 41}} patch-customer show-reply)
+       (+{time: "2026-10-05", id: 1, body: {plan: :pro, state: :paused, shoe-size: 41}} patch-customer show-reply)
        (+{id: 1, at: "2026-10-04"} get-as-of show-reply)
-       (+{auth: {customer-id: 1}, body: {key: "k1", metric: Api, qty: 120}} post-event show-reply)
-       (+{auth: {customer-id: 1}, body: {key: "k1", metric: Api, qty: 120}} post-event show-reply)
-       (+{auth: {customer-id: 1}, body: {key: "k1", metric: Api, qty: 999}} post-event show-reply)
-       (+{auth: {customer-id: 1}, body: {key: "k2", customer-id: 2, metric: Api, qty: 5}} post-event show-reply)
+       (+{auth: {customer-id: 1}, body: {key: "k1", metric: :api, qty: 120}} post-event show-reply)
+       (+{auth: {customer-id: 1}, body: {key: "k1", metric: :api, qty: 120}} post-event show-reply)
+       (+{auth: {customer-id: 1}, body: {key: "k1", metric: :api, qty: 999}} post-event show-reply)
+       (+{auth: {customer-id: 1}, body: {key: "k2", customer-id: 2, metric: :api, qty: 5}} post-event show-reply)
 
 show-reply = say "{status}  {json}" .{}
 reply      = .{status json}
 
 -- POST /customers   ⊃ lifts the body's fields up, ⊂ packs the row back up
 post-customer {body: {name, email, plan}} =
-  ⊃body +{state: Active} ⊂customer{name email plan state}
+  ⊃body +{state: :active} ⊂customer{name email plan state}
   customers.insert +{change: {} ∆ customer} log
   +{status: 201, json: customer} reply
 post-customer = +{status: 422, json: "name, email and plan are required"} reply

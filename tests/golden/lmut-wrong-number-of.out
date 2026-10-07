@@ -1,27 +1,27 @@
 run error after 234 steps: the enclosing record has no field from @172
-> 200  {id: 1, name: "Checking", kind: Asset, archived: false, balance: 440000, recent: [{id: 1, tx-id: 1, account-id: 1, amount: 250000, date: "2026-09-01"}, {id: 3, tx-id: 2, account-id: 1, amount: 310000, date: "2026-09-25"}, {id: 6, tx-id: 3, account-id: 1, amount: -120000, date: "2026-09-27"}]}
-> 201  {id: 8, name: "Restaurants", kind: Expense, archived: false}
+> 200  {id: 1, name: "Checking", kind: :asset, archived: false, balance: 440000, recent: [{id: 1, tx-id: 1, account-id: 1, amount: 250000, date: "2026-09-01"}, {id: 3, tx-id: 2, account-id: 1, amount: 310000, date: "2026-09-25"}, {id: 6, tx-id: 3, account-id: 1, amount: -120000, date: "2026-09-27"}]}
+> 201  {id: 8, name: "Restaurants", kind: :expense, archived: false}
 > 422  kind must be Asset, Liability, Income, Expense or Equity
 > 201  {id: 4, date: "2026-10-02", payee: "Mercadona"}
 > 422  postings must balance; these sum to 1
 > 422  postings use missing or archived accounts
 > 200  [{tx-id: 1, account-id: 1, amount: 250000, date: "2026-09-01", payee: "Opening balance"}, {tx-id: 2, account-id: 1, amount: 310000, date: "2026-09-25", payee: "Acme Payroll"}, {tx-id: 3, account-id: 1, amount: -120000, date: "2026-09-27", payee: "Landlord"}]
 > 409  account has postings — archive it instead
-> 200  {id: 2, name: "Savings", kind: Asset, archived: true}
+> 200  {id: 2, name: "Savings", kind: :asset, archived: true}
 > 204  nil
 > 200  {assets: 560000, liabilities: -4250, equity: -250000, net-worth: 555750}
-subj {id: 4, name: "Salary", kind: Income, archived: false}
+subj {id: 4, name: "Salary", kind: :income, archived: false}
 pause error
 sql [-1] CREATE TABLE "accounts" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL, "kind" TEXT NOT NULL, "archived" INTEGER NOT NULL)
 sql [-1] CREATE TABLE "transactions" ("id" INTEGER PRIMARY KEY, "date" TEXT NOT NULL, "payee" TEXT NOT NULL, "memo" TEXT)
 sql [-1] CREATE TABLE "postings" ("id" INTEGER PRIMARY KEY, "tx-id" INTEGER NOT NULL, "account-id" INTEGER NOT NULL, "amount" REAL NOT NULL, "date" TEXT NOT NULL)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Checking', 'Asset', 0)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Savings', 'Asset', 0)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Credit card', 'Liability', 0)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Salary', 'Income', 0)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Groceries', 'Expense', 0)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Rent', 'Expense', 0)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Opening balances', 'Equity', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Checking', 'asset', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Savings', 'asset', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Credit card', 'liability', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Salary', 'income', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Groceries', 'expense', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Rent', 'expense', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Opening balances', 'equity', 0)
 sql [-1] INSERT INTO "transactions" ("date", "payee") VALUES ('2026-09-01', 'Opening balance')
 sql [-1] INSERT INTO "transactions" ("date", "payee") VALUES ('2026-09-25', 'Acme Payroll')
 sql [-1] INSERT INTO "transactions" ("date", "payee") VALUES ('2026-09-27', 'Landlord')
@@ -34,7 +34,7 @@ sql [-1] INSERT INTO "postings" ("tx-id", "account-id", "amount", "date") VALUES
 sql [3] SELECT * FROM "accounts" WHERE "id" = 1
 sql [7] SELECT * FROM "postings" WHERE ("account-id" = 1) ORDER BY "id"
 sql [11] SELECT * FROM "postings" WHERE ("account-id" = 1) ORDER BY "id"
-sql [26] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Restaurants', 'Expense', 0)
+sql [26] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Restaurants', 'expense', 0)
 sql [52] SELECT * FROM "accounts" WHERE "id" = 5
 sql [58] SELECT * FROM "accounts" WHERE "id" = 3
 sql [64] INSERT INTO "transactions" ("date", "payee") VALUES ('2026-10-02', 'Mercadona')
@@ -52,17 +52,17 @@ sql [169] SELECT * FROM "postings" WHERE ("tx-id" = 3) ORDER BY "id"
 sql [171] DELETE FROM "postings" WHERE "id" = 5
 sql [173] DELETE FROM "postings" WHERE "id" = 6
 sql [176] DELETE FROM "transactions" WHERE "id" = 3
-sql [189] SELECT * FROM "accounts" WHERE ("kind" = 'Asset') ORDER BY "id"
+sql [189] SELECT * FROM "accounts" WHERE ("kind" = 'asset') ORDER BY "id"
 sql [192] SELECT * FROM "postings" WHERE ("account-id" = 1) ORDER BY "id"
 sql [196] SELECT * FROM "postings" WHERE ("account-id" = 2) ORDER BY "id"
-sql [202] SELECT * FROM "accounts" WHERE ("kind" = 'Liability') ORDER BY "id"
+sql [202] SELECT * FROM "accounts" WHERE ("kind" = 'liability') ORDER BY "id"
 sql [205] SELECT * FROM "postings" WHERE ("account-id" = 3) ORDER BY "id"
-sql [211] SELECT * FROM "accounts" WHERE ("kind" = 'Equity') ORDER BY "id"
+sql [211] SELECT * FROM "accounts" WHERE ("kind" = 'equity') ORDER BY "id"
 sql [214] SELECT * FROM "postings" WHERE ("account-id" = 7) ORDER BY "id"
-sql [230] SELECT * FROM "accounts" WHERE ("kind" = 'Income') ORDER BY "id"
+sql [230] SELECT * FROM "accounts" WHERE ("kind" = 'income') ORDER BY "id"
 check 2 errors
-  ✗ 161:34 kind-flow needs from — the record here is {kind: Income} (flow reads it)
-  ✗ 161:59 kind-flow needs from — the record here is {kind: Expense} (flow reads it)
+  ✗ 161:34 kind-flow needs from — the record here is {kind: :income} (flow reads it)
+  ✗ 161:59 kind-flow needs from — the record here is {kind: :expense} (flow reads it)
 sig main : {..r, ¬account, ¬id, ¬json, ¬missing, ¬status} → ✗ stops with an error (see Notes)
 sig show-reply : {..r, json, status} → {}
 sig reply : {..r, json, status} → {status, json}
@@ -77,11 +77,11 @@ sig post-account : {..r, body: {..b, kind, name, problem}, ¬json, ¬status} →
 sig post-account : {..r, body: {..b, kind, name, ¬problem}, ¬account, ¬json, ¬status} → {status: Num, json: {id: Num, name: Text, kind: Const, archived: Bool}}
 sig post-account : {..r, body: {..b, kind, name, ¬problem}, ¬json, ¬status} → {status: Num, json: Text}
 sig post-account : {..r, ¬json, ¬status} → {status: Num, json: Text}
-sig kind-ok : {..r, kind: Asset} → {..r, kind: Asset}
-sig kind-ok : {..r, kind: Liability} → {..r, kind: Liability}
-sig kind-ok : {..r, kind: Income} → {..r, kind: Income}
-sig kind-ok : {..r, kind: Expense} → {..r, kind: Expense}
-sig kind-ok : {..r, kind: Equity} → {..r, kind: Equity}
+sig kind-ok : {..r, kind: :asset} → {..r, kind: :asset}
+sig kind-ok : {..r, kind: :liability} → {..r, kind: :liability}
+sig kind-ok : {..r, kind: :income} → {..r, kind: :income}
+sig kind-ok : {..r, kind: :expense} → {..r, kind: :expense}
+sig kind-ok : {..r, kind: :equity} → {..r, kind: :equity}
 sig kind-ok : {..r, ¬problem} → {..r, problem: Text}
 sig create-account : {..r, body: {..b, problem}, ¬json, ¬status} → {..r, status: Num, json, body: {..b, problem}}
 sig create-account : {..r, body: {..b, kind: Const, name: Text}, ¬account, ¬json, ¬status} → {..r, account: {id: Num, name: Text, kind: Const, archived: Bool}, status: Num, json: {id: Num, name: Text, kind: Const, archived: Bool}, body: {..b, name: Text, kind: Const}}

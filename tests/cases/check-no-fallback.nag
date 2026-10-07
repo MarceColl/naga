@@ -1,18 +1,18 @@
 -- Invoice collection. The card starts short, the customer tops up
 -- while we wait, and the second attempt goes through.
 
-main = +{id: 7, total: 120, card: {kind: Visa, balance: 80}} invoice
+main = +{id: 7, total: 120, card: {kind: :visa, balance: 80}} invoice
 
 invoice  = finalize collect report
 finalize = +{due: now + 30, tries: 0}
 collect  = charge settle
 
 charge {card} = +{amount: total} gateway
-charge        = +{declined: NoCard}
+charge        = +{declined: :nocard}
 
 gateway {amount} when card.balance ≥ amount =
-  @card( balance=balance - ^amount ) -{amount} +{ok: Approved}
-gateway {-amount} = +{declined: Insufficient}
+  @card( balance=balance - ^amount ) -{amount} +{ok: :approved}
+gateway {-amount} = +{declined: :insufficient}
 
 settle {-ok}                             = paid
 settle {-declined, tries} when tries < 3 = fail wait collect

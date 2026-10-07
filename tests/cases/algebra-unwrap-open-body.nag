@@ -1,2 +1,2 @@
-main = +{body: {name: "x", kind: Asset}} post
+main = +{body: {name: "x", kind: :asset}} post
 post {body: {name, kind}} = ⊃body say name

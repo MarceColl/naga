@@ -189,7 +189,7 @@ fn from_sql(ty: ColType, v: &Sql) -> Option<Value> {
         (ColType::Text, v) => Value::Text(string(v).into()),
         (ColType::Bool, Sql::Num(n)) => Value::Bool(*n != 0.0),
         (ColType::Bool, Sql::Text(s)) => Value::Bool(s != "0"),
-        (ColType::Const, v) => Value::Const(string(v).into()),
+        (ColType::Const, v) => Value::Const(string(v).to_lowercase().into()),
         (ColType::Json, v) => from_json(&string(v)).unwrap_or_else(|| match v {
             Sql::Num(n) => Value::Num(*n),
             _ => Value::Text(string(v).into()),

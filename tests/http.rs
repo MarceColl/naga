@@ -27,19 +27,19 @@ async fn send(app: &axum::Router, method: &str, uri: &str, body: &str) -> (u16, 
 async fn the_ledger_answers_over_http() {
     let app = naga::serve::start(ledger(), fresh_db("ledger")).unwrap();
     let cases = [
-        ("GET", "/accounts/1", "", 200, r#"{"id":1,"name":"Checking","kind":"Asset","archived":false,"balance":440000,"#),
+        ("GET", "/accounts/1", "", 200, r#"{"id":1,"name":"Checking","kind":"asset","archived":false,"balance":440000,"#),
         ("GET", "/accounts/abc", "", 400, r#"{"error":"id must be Int"}"#),
         ("GET", "/accounts/99", "", 404, r#""no such account""#),
         ("POST", "/accounts", r#"{"name":"Pets","kind":"Animal"}"#, 422, r#""kind must be"#),
         ("POST", "/accounts", r#"{"name":"Pets"}"#, 400, r#"{"error":"kind is required"}"#),
-        ("POST", "/accounts", r#"{"name":7,"kind":"Asset"}"#, 400, r#"{"error":"name must be Text"}"#),
+        ("POST", "/accounts", r#"{"name":7,"kind":"asset"}"#, 400, r#"{"error":"name must be Text"}"#),
         ("POST", "/accounts", "[1]", 400, r#"{"error":"the body must be a JSON object"}"#),
         ("POST", "/transactions", r#"{"date":"d","payee":"p","postings":{}}"#, 400, r#"{"error":"postings must be [{account-id: Int, amount: Num}]"}"#),
         ("POST", "/transactions", r#"{"date":"d","payee":"p","postings":[{"account-id":1,"amount":5},{"account-id":2.5,"amount":-5}]}"#, 400, r#"{"error":"postings[1].account-id must be Int"}"#),
         ("POST", "/transactions", r#"{"date":"d","payee":"p","postings":[{"amount":5}]}"#, 400, r#"{"error":"postings[0].account-id is required"}"#),
         ("POST", "/transactions", r#"{"date":"2026-10-02","payee":"Bakery","postings":[{"account-id":5,"amount":300,"note":"x"},{"account-id":1,"amount":-300}]}"#, 201, r#"{"id":4,"date":"2026-10-02","payee":"Bakery"}"#),
-        ("POST", "/accounts", r#"{"name":"Cafés","kind":"Expense","extra":1}"#, 201, r#"{"id":8,"name":"Cafés","kind":"Expense","archived":false}"#),
-        ("PATCH", "/accounts/2", r#"{"archived":true}"#, 200, r#"{"id":2,"name":"Savings","kind":"Asset","archived":true}"#),
+        ("POST", "/accounts", r#"{"name":"Cafés","kind":"expense","extra":1}"#, 201, r#"{"id":8,"name":"Cafés","kind":"expense","archived":false}"#),
+        ("PATCH", "/accounts/2", r#"{"archived":true}"#, 200, r#"{"id":2,"name":"Savings","kind":"asset","archived":true}"#),
         ("DELETE", "/accounts/8", "", 204, ""),
         ("DELETE", "/accounts/1", "", 409, r#""account has postings"#),
         ("GET", "/transactions?account=6", "", 200, r#"[{"tx-id":3,"account-id":6,"amount":120000,"date":"2026-09-27","payee":"Landlord"}]"#),
@@ -59,7 +59,7 @@ async fn the_ledger_answers_over_http() {
 async fn tables_outlive_the_server_and_seed_once() {
     let db = fresh_db("again");
     let app = naga::serve::start(ledger(), db.clone()).unwrap();
-    assert_eq!(send(&app, "POST", "/accounts", r#"{"name":"Pets","kind":"Expense"}"#).await.0, 201);
+    assert_eq!(send(&app, "POST", "/accounts", r#"{"name":"Pets","kind":"expense"}"#).await.0, 201);
     let app = naga::serve::start(ledger(), db).unwrap();
     let (_, accounts) = send(&app, "GET", "/accounts", "").await;
     assert_eq!(accounts.matches("\"name\"").count(), 8, "{accounts}");

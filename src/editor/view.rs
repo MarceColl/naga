@@ -192,19 +192,22 @@ fn classes(line: &[char]) -> Vec<Class> {
                 mark(&mut out, i, j, Class::Num);
                 j
             }
+            // :asset, a constant
+            ':' if next.is_some_and(id_start) && !(i > 0 && (id_cont(line[i - 1]) || line[i - 1] == ':')) => {
+                let mut j = i + 1;
+                while j < line.len() && (id_cont(line[j]) || (line[j] == '-' && line.get(j + 1).is_some_and(|&n| id_start(n)))) {
+                    j += 1;
+                }
+                mark(&mut out, i, j, Class::Num);
+                j
+            }
             c if id_start(c) => {
                 let mut j = i + 1;
                 while j < line.len() && (id_cont(line[j]) || (line[j] == '-' && line.get(j + 1).is_some_and(|&n| id_start(n)))) {
                     j += 1;
                 }
                 let word: String = line[i..j].iter().collect();
-                let class = if KEYWORDS.contains(&word.as_str()) {
-                    Class::Kw
-                } else if c.is_uppercase() {
-                    Class::Num
-                } else {
-                    Class::Id
-                };
+                let class = if KEYWORDS.contains(&word.to_lowercase().as_str()) { Class::Kw } else { Class::Id };
                 mark(&mut out, i, j, class);
                 j
             }
@@ -928,7 +931,8 @@ mod tests {
     #[test]
     fn tokens_get_their_classes() {
         assert_eq!(kinds(r#"main = +{n: 3} say "hi" n-1 -- done"#), r#"iiii...ooi..n..kkk.ssss.i.n.ccccccc"#);
-        assert_eq!(kinds("go when kind == Asset ⊃body ^^id"), "ii.kkkk.iiii....nnnnn.oiiii.ooii");
+        assert_eq!(kinds("go when kind == :asset ⊃body ^^id"), "ii.kkkk.iiii....nnnnnn.oiiii.ooii");
+        assert_eq!(kinds("{a:b} WHEN"), ".i.i..kkkk");
         assert_eq!(kinds("@lines( x ) post-account"), "oooooo..i...iiiiiiiiiiii");
     }
 }

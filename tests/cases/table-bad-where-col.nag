@@ -1,3 +1,3 @@
 table todos :: {title: Text, done: Bool, tags, status: Const}
-seed todos = [{title: "a", done: false, tags: [1, "x"], status: Open}]
-main = todos.where {color: Red}
+seed todos = [{title: "a", done: false, tags: [1, "x"], status: :open}]
+main = todos.where {color: :red}

@@ -1,9 +1,9 @@
 run done after 12 steps
-> {lines: [{sku: Tea, qty: 2, price: 4.5, total: 9}, {sku: Pot, qty: 1, price: 30, total: 30}], subtotal: 39, discount: 3.9}
-subj {lines: [{sku: Tea, qty: 2, price: 4.5, total: 9}, {sku: Pot, qty: 1, price: 30, total: 30}], subtotal: 39, discount: 3.9}
+> {lines: [{sku: :tea, qty: 2, price: 4.5, total: 9}, {sku: :pot, qty: 1, price: 30, total: 30}], subtotal: 39, discount: 3.9}
+subj {lines: [{sku: :tea, qty: 2, price: 4.5, total: 9}, {sku: :pot, qty: 1, price: 30, total: 30}], subtotal: 39, discount: 3.9}
 pause done
 check 0 errors
-sig main : {..r, ¬discount, ¬lines, ¬subtotal} → {..r, lines: [{sku: Pot|Tea, qty: Num, price: Num, total: Num}], subtotal: Num, discount: Num}
+sig main : {..r, ¬discount, ¬lines, ¬subtotal} → {..r, lines: [{sku: :pot|:tea, qty: Num, price: Num, total: Num}], subtotal: Num, discount: Num}
 sig price-order : {..r, lines: [{.., price: Num, qty: Num, ¬total}], ¬discount, ¬subtotal} → {..r, lines: [{..l, total: Num, price: Num, qty: Num}], subtotal: Num, discount: Num}
 sig price-order : {..r, lines: {..l, price: Num, qty: Num, ¬total}} → ✗ sum() needs a list, got Num
 sig line-total : {..r, price: Num, qty: Num, ¬total} → {..r, total: Num, qty: Num, price: Num}

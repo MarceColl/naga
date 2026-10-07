@@ -1,4 +1,4 @@
-main = +{s: Open} f g
-f {s: Open} = s=Done
-f {s: Done} = nop
-g {s: Done} = say "done"
+main = +{s: :open} f g
+f {s: :open} = s=:done
+f {s: :done} = nop
+g {s: :done} = say "done"

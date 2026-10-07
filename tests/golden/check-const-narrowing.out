@@ -1,9 +1,9 @@
 run done after 6 steps
 > done
-subj {s: Done}
+subj {s: :done}
 pause done
 check 0 errors
-sig main : {..r, ¬s} → {..r, s: Done}
-sig f : {..r, s: Open} → {..r, s: Done}
-sig f : {..r, s: Done} → {..r, s: Done}
-sig g : {..r, s: Done} → {..r, s: Done}
+sig main : {..r, ¬s} → {..r, s: :done}
+sig f : {..r, s: :open} → {..r, s: :done}
+sig f : {..r, s: :done} → {..r, s: :done}
+sig g : {..r, s: :done} → {..r, s: :done}

@@ -47,16 +47,16 @@ impl Value {
             Value::Bool(b) => b.to_string(),
             Value::Num(n) => num::show(*n),
             Value::Text(s) => num::json_str(s),
-            Value::Const(c) => c.to_string(),
+            Value::Const(c) => format!(":{c}"),
             Value::List(xs) => format!("[{}]", xs.iter().map(Value::show).collect::<Vec<_>>().join(", ")),
             Value::Rec(r) => show_rec(r),
         }
     }
 
-    /// Strings print bare; everything else as `show`.
+    /// Strings and constants print bare; everything else as `show`.
     pub fn text(&self) -> String {
         match self {
-            Value::Text(s) => s.to_string(),
+            Value::Text(s) | Value::Const(s) => s.to_string(),
             v => v.show(),
         }
     }

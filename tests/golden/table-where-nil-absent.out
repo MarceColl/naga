@@ -2,7 +2,7 @@ run error after 3 steps: todo needs done — todos.done is required (write Bool?
 subj {todo: {title: "b"}}
 pause error
 sql [-1] CREATE TABLE "todos" ("id" INTEGER PRIMARY KEY, "title" TEXT NOT NULL, "done" INTEGER NOT NULL, "tags" TEXT, "status" TEXT NOT NULL)
-sql [-1] INSERT INTO "todos" ("title", "done", "tags", "status") VALUES ('a', 0, '[1,"x"]', 'Open')
+sql [-1] INSERT INTO "todos" ("title", "done", "tags", "status") VALUES ('a', 0, '[1,"x"]', 'open')
 check 1 errors
   ✗ 3:29 todo needs done — todos.done is required
 sig main : {..r, ¬todo} → ✗ stops with an error (see Notes)

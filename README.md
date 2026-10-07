@@ -11,15 +11,16 @@ cargo run --release -- run examples/ledger.nag
 prints parse diagnostics, the run (output, final record, every SQL statement) and the
 checker's errors and signatures.
 
-## Parity with the reference
+## The reference, frozen
 
-`spec/` holds the JavaScript reference (`lang.js`) this port matches byte for byte.
+`spec/` holds the JavaScript reference (`lang.js`) this port matched byte for byte, until naga
+made names case-insensitive and constants `:name`. The goldens in `tests/golden/` are now
+naga's own output: the 92 cases were converted (`Asset` → `:asset`) and behave as they did
+under the reference, differing only in spelling and in error columns.
 
 | command | checks |
 | --- | --- |
-| `cargo test` | `tests/cases/*.nag` against `tests/golden/*.out`; stepping/time travel; incremental rechecks |
-| `node spec/report.js --golden` | regenerates the goldens from the reference |
-| `node spec/fuzz.js 500 1` | mutates examples and cases, diffs `naga run` against the reference (needs a release build) |
+| `cargo test` | `tests/cases/*.nag` against `tests/golden/*.out`; stepping/time travel; incremental rechecks; routes, runs, the live database, the editor |
 
 ## Layout
 

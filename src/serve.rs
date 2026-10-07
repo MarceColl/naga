@@ -145,7 +145,7 @@ pub fn handle(p: &Program, store: &mut Store, req: &Req) -> Handled {
 
 /// Path params and query fields at the top level, the body in `body`, the time in `time`.
 pub fn request(r: &Route, job: &Req) -> Result<Rec, String> {
-    let raw = |pairs: &Pairs, d: &FieldDecl| pairs.iter().find(|(k, _)| **k == *d.name).map(|(_, v)| (d.name.clone(), text(d, v)));
+    let raw = |pairs: &Pairs, d: &FieldDecl| pairs.iter().find(|(k, _)| k.eq_ignore_ascii_case(&d.name)).map(|(_, v)| (d.name.clone(), text(d, v)));
     let given: Rec = r.path_params().filter_map(|d| raw(&job.path, d)).chain(r.query.iter().filter_map(|d| raw(&job.query, d))).collect();
     let mut rec = record(r.params(), &given, "")?;
     if let Some(decls) = &r.body {
@@ -161,7 +161,9 @@ fn record<'a>(decls: impl IntoIterator<Item = &'a FieldDecl>, given: &Rec, at: &
     let mut out = Rec::new();
     for d in decls {
         let at = format!("{at}{}", d.name);
-        match given.get(&d.name).filter(|v| !matches!(v, Value::Nil)) {
+        // names ignore case, JSON keys included
+        let v = given.iter().find(|(k, _)| k.eq_ignore_ascii_case(&d.name)).map(|(_, v)| v);
+        match v.filter(|v| !matches!(v, Value::Nil)) {
             None if d.opt => {}
             None => return Err(format!("{at} is required")),
             Some(v) => drop(out.insert(d.name.clone(), decode(&d.ty, v, &at)?)),
@@ -174,7 +176,7 @@ fn decode(ty: &FieldTy, v: &Value, at: &str) -> Result<Value, String> {
     use {ColType::*, FieldTy::Col};
     match (ty, v) {
         (Col(Int), Value::Num(n)) if n.fract() != 0.0 => Err(format!("{at} must be {ty}")),
-        (Col(Const), Value::Text(s)) => Ok(Value::Const(s.clone())),
+        (Col(Const), Value::Text(s)) => Ok(Value::Const(s.to_lowercase().into())),
         (Col(Int | Num), Value::Num(_)) | (Col(Text), Value::Text(_)) | (Col(Bool), Value::Bool(_)) | (Col(Json), _) => Ok(v.clone()),
         (FieldTy::List(t), Value::List(xs)) => {
             let xs = xs.iter().enumerate().map(|(i, x)| decode(t, x, &format!("{at}[{i}]")));

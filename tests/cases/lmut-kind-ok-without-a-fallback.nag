@@ -7,13 +7,13 @@ table accounts     :: {name: Text, kind: Const, archived: Bool}
 table transactions :: {date: Text, payee: Text, memo: Text?}
 table postings     :: {tx-id: Int, account-id: Int, amount: Num, date: Text}
 
-seed accounts = [{name: "Checking", kind: Asset, archived: false},
-                 {name: "Savings", kind: Asset, archived: false},
-                 {name: "Credit card", kind: Liability, archived: false},
-                 {name: "Salary", kind: Income, archived: false},
-                 {name: "Groceries", kind: Expense, archived: false},
-                 {name: "Rent", kind: Expense, archived: false},
-                 {name: "Opening balances", kind: Equity, archived: false}]
+seed accounts = [{name: "Checking", kind: :asset, archived: false},
+                 {name: "Savings", kind: :asset, archived: false},
+                 {name: "Credit card", kind: :liability, archived: false},
+                 {name: "Salary", kind: :income, archived: false},
+                 {name: "Groceries", kind: :expense, archived: false},
+                 {name: "Rent", kind: :expense, archived: false},
+                 {name: "Opening balances", kind: :equity, archived: false}]
 
 seed transactions = [{date: "2026-09-01", payee: "Opening balance"},
                      {date: "2026-09-25", payee: "Acme Payroll"},
@@ -28,8 +28,8 @@ seed postings = [{tx-id: 1, account-id: 1, amount: 250000, date: "2026-09-01"},
 
 -- a session of requests, as the router would hand them over
 main = (+{id: 1} get-account show-reply)
-       (+{body: {name: "Restaurants", kind: Expense}} post-account show-reply)
-       (+{body: {name: "Pets", kind: Animal}} post-account show-reply)
+       (+{body: {name: "Restaurants", kind: :expense}} post-account show-reply)
+       (+{body: {name: "Pets", kind: :animal}} post-account show-reply)
        (+{body: {date: "2026-10-02", payee: "Mercadona",
                  postings: [{account-id: 5, amount: 4250}, {account-id: 3, amount: -4250}]}}
         post-transaction show-reply)
@@ -68,11 +68,11 @@ recent = postings.where when account-id == ^id +{recent: postings} -{postings}
 post-account {body: {name, kind}} = @body( kind-ok ) create-account reply
 post-account                      = +{status: 422, json: "name and kind are required"} reply
 
-kind-ok {kind: Asset}     = nop
-kind-ok {kind: Liability} = nop
-kind-ok {kind: Income}    = nop
-kind-ok {kind: Expense}   = nop
-kind-ok {kind: Equity}    = nop
+kind-ok {kind: :asset}     = nop
+kind-ok {kind: :liability} = nop
+kind-ok {kind: :income}    = nop
+kind-ok {kind: :expense}   = nop
+kind-ok {kind: :equity}    = nop
 
 create-account {body: {problem}} = +{status: 422, json: body.problem}
 create-account = +{account: {name: body.name, kind: body.kind, archived: false}}
@@ -146,7 +146,7 @@ tx-deleted {-deleted} = +{status: 204, json: nil}
 
 -- GET /reports/balance-sheet
 get-balance-sheet =
-  +{assets: {kind: Asset}, liabilities: {kind: Liability}, equity: {kind: Equity}}
+  +{assets: {kind: :asset}, liabilities: {kind: :liability}, equity: {kind: :equity}}
   (@assets( kind-total ) ‖ @liabilities( kind-total ) ‖ @equity( kind-total ))
   +{status: 200, json: {assets: assets.total, liabilities: liabilities.total,
                         equity: equity.total, net-worth: assets.total + liabilities.total}}
@@ -156,7 +156,7 @@ kind-total = accounts.where when kind == ^kind @accounts( with-balance )
              +{total: sum(accounts.balance)}
 
 -- GET /reports/income?from=&to=   dates as text, to is exclusive
-get-income {from, to} = +{income: {kind: Income}, expenses: {kind: Expense}}
+get-income {from, to} = +{income: {kind: :income}, expenses: {kind: :expense}}
                         (@income( kind-flow ) ‖ @expenses( kind-flow ))
                         +{status: 200, json: {income: -income.total, expenses: expenses.total,
                                               net: -(income.total + expenses.total),

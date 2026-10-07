@@ -1,8 +1,8 @@
 run error after 3 steps: todos has no column color (it has id, title, done, tags, status) @3
-subj {todo: {color: Red}}
+subj {todo: {color: :red}}
 pause error
 sql [-1] CREATE TABLE "todos" ("id" INTEGER PRIMARY KEY, "title" TEXT NOT NULL, "done" INTEGER NOT NULL, "tags" TEXT, "status" TEXT NOT NULL)
-sql [-1] INSERT INTO "todos" ("title", "done", "tags", "status") VALUES ('a', 0, '[1,"x"]', 'Open')
+sql [-1] INSERT INTO "todos" ("title", "done", "tags", "status") VALUES ('a', 0, '[1,"x"]', 'open')
 check 1 errors
-  ✗ 3:29 todos has no column color
+  ✗ 3:30 todos has no column color
 sig main : {..r, ¬todo} → ✗ stops with an error (see Notes)

@@ -1,7 +1,7 @@
-run error after 5 steps: paidAt is already there — use paidAt=… to change it @2
-subj {paidAt: 1}
+run error after 5 steps: paidat is already there — use paidat=… to change it @2
+subj {paidat: 1}
 pause error
 check 1 errors
-  ✗ 1:38 paid adds paidAt, but it is already there — the record here is {..r, paidAt: Num, due: Num, tries: Num}
-sig main : {..r, ¬due, ¬paidAt, ¬tries} → ✗ stops with an error (see Notes)
-sig paid : {..r, due, tries, ¬paidAt} → {..r, paidAt: Num}
+  ✗ 1:38 paid adds paidat, but it is already there — the record here is {..r, paidat: Num, due: Num, tries: Num}
+sig main : {..r, ¬due, ¬paidat, ¬tries} → ✗ stops with an error (see Notes)
+sig paid : {..r, due, tries, ¬paidat} → {..r, paidat: Num}

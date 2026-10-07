@@ -312,7 +312,7 @@ pub fn fmt_t(w: Option<&World>, t: &Ty, d: usize) -> String {
         Ty::Nil => "nil".into(),
         Ty::Any | Ty::Var(_) => "Any".into(),
         Ty::Never => "Never".into(),
-        Ty::Const(Some(n)) => n.join("|"),
+        Ty::Const(Some(n)) => n.iter().map(|c| format!(":{c}")).collect::<Vec<_>>().join("|"),
         Ty::Const(None) => "Const".into(),
         Ty::List(of) => format!("[{}]", fmt_t(w, of, d + 1)),
         Ty::Rec(_, _) if d > 3 => "{…}".into(),

@@ -37,15 +37,15 @@ fn id_start(c: char) -> bool {
 fn id_cont(c: char) -> bool {
     id_start(c) || is_digit(c)
 }
-pub fn is_upper(s: &str) -> bool {
-    s.chars().next().is_some_and(|c| get_general_category(c) == G::UppercaseLetter)
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Tk {
     Num(f64),
     Str(String),
+    /// A name, folded to lowercase: names ignore case.
     Id(Name),
+    /// `:asset`, folded to lowercase.
+    Const(Name),
     Op(&'static str),
     Hole(String),
 }
@@ -164,8 +164,11 @@ fn lex(src: &str, line: usize, types: bool) -> R<Vec<Token>> {
             toks.push(Token { t: Tk::Hole(rest), raw: raw(i, cs.len()), line, col: col[i], end: col[cs.len()] });
             break;
         }
-        if id_start(c) {
-            let mut j = i + 1;
+        // a name runs to its end, dashes between parts; `:name` glued, after no name, is a constant
+        let constant = c == ':' && cs.get(i + 1).is_some_and(|&n| id_start(n)) && !(i > 0 && (id_cont(cs[i - 1]) || cs[i - 1] == ':'));
+        if id_start(c) || constant {
+            let from = i + usize::from(constant);
+            let mut j = from + 1;
             while j < cs.len() && id_cont(cs[j]) {
                 j += 1;
             }
@@ -175,7 +178,8 @@ fn lex(src: &str, line: usize, types: bool) -> R<Vec<Token>> {
                     j += 1;
                 }
             }
-            push(Tk::Id(raw(i, j).into()), j - i, &mut i);
+            let name: Name = raw(from, j).to_lowercase().into();
+            push(if constant { Tk::Const(name) } else { Tk::Id(name) }, j - i, &mut i);
             continue;
         }
         let at = |o: &str| o.chars().enumerate().all(|(k, oc)| cs.get(i + k) == Some(&oc));
@@ -325,6 +329,7 @@ fn nud(ts: &mut Ts) -> R<Expr> {
     let Some(tok) = ts.next() else { return ts.err("this expression ends too early", None) };
     match &tok.t {
         Tk::Num(n) => Ok(Expr::Lit(Value::Num(*n))),
+        Tk::Const(c) => postfix(ts, Expr::Lit(Value::Const(c.clone()))),
         Tk::Str(_) => {
             let e = string(&tok)?;
             postfix(ts, e)
@@ -340,9 +345,6 @@ fn nud(ts: &mut Ts) -> R<Expr> {
             }
             if is_keyword(v) {
                 return ts.err(format!("“{v}” can't be used inside an expression"), Some(&tok));
-            }
-            if is_upper(v) {
-                return Ok(Expr::Lit(Value::Const(v.clone())));
             }
             if ts.is_op("(", 0) {
                 let Some(f) = Builtin::named(v) else { return ts.err(format!("there's no function called {v}()"), Some(&tok)) };
@@ -489,9 +491,9 @@ fn literal(ts: &mut Ts) -> R<Value> {
             "true" => return Ok(Value::Bool(true)),
             "false" => return Ok(Value::Bool(false)),
             "nil" => return Ok(Value::Nil),
-            v if is_upper(v) => return Ok(Value::Const(v.into())),
             _ => {}
         },
+        Tk::Const(v) => return Ok(Value::Const(v.clone())),
         Tk::Op("[") => {
             let mut items = vec![];
             while !ts.is_op("]", 0) {
@@ -656,6 +658,7 @@ fn stmt_at(ts: &mut Ts) -> R<Vec<Stmt>> {
             ts.next();
             mk(StmtKind::Hole(note.clone()))
         }
+        Tk::Const(c) => ts.err(format!(":{c} is a constant, not a step — put it in a field, like +{{status: :{c}}}"), Some(&start)),
         Tk::Op(op) => {
             match *op {
                 "+{" => {
@@ -720,9 +723,7 @@ fn stmt_at(ts: &mut Ts) -> R<Vec<Stmt>> {
             if is_keyword(v) {
                 return ts.err(format!("“{v}” can't start a step"), Some(&start));
             }
-            if is_upper(v) {
-                return ts.err(format!("{v} is a constant, not a word — put it in a field, like +{{status: {v}}}"), Some(&start));
-            }
+
             let (n1, n2) = (ts.peek(0).map(|t| t.t.clone()), ts.peek(1).map(|t| t.t.clone()));
             match (n1, n2) {
                 (Some(Tk::Op(".")), Some(Tk::Id(op))) => {
@@ -753,7 +754,7 @@ fn stmt_at(ts: &mut Ts) -> R<Vec<Stmt>> {
                     ts.next();
                     let to = ts.next();
                     match id_of(&to) {
-                        Some(n) if !is_keyword(n) && !is_upper(n) => mk(StmtKind::Rename(v.clone(), n.clone())),
+                        Some(n) if !is_keyword(n) => mk(StmtKind::Rename(v.clone(), n.clone())),
                         _ => ts.err(format!("→ needs the new field name, like {v}→other"), to.as_ref()),
                     }
                 }
@@ -788,9 +789,6 @@ fn def(ts: &mut Ts) -> R<(Name, Clause)> {
     let name_tok = name_tok.unwrap();
     if is_keyword(&name) || Builtin::named(&name).is_some() {
         return ts.err(format!("{name} is a built-in name"), Some(&name_tok));
-    }
-    if is_upper(&name) {
-        return ts.err("word names start lowercase; Capitalized names are constants", Some(&name_tok));
     }
     let (mut pat, mut guard, mut guard_src) = (None, None, None);
     if ts.is_op("{", 0) {
@@ -885,7 +883,7 @@ fn field_ty(ts: &mut Ts, nested: bool, at: Option<&Token>) -> R<FieldTy> {
         return Ok(FieldTy::List(Box::new(t)));
     }
     let t = ts.next();
-    match id_of(&t).and_then(|v| ColType::ALL.iter().find(|(k, _)| *k == &**v)) {
+    match id_of(&t).and_then(|v| ColType::ALL.iter().find(|(k, _)| k.eq_ignore_ascii_case(v))) {
         Some((_, c)) => Ok(FieldTy::Col(*c)),
         None if nested => ts.err("types are Int, Num, Text, Bool, Const, Json, [Type] and {field: Type} (add ? when it may be missing, like Text?)", t.as_ref().or(at)),
         None => ts.err("column types are Int, Num, Text, Bool, Const, Json (add ? for an optional column, like Text?)", t.as_ref().or(at)),
@@ -983,7 +981,7 @@ fn param(src: &str, opt: bool) -> Result<FieldDecl, String> {
         Some(t) if opt => (t, true),
         _ => (ty, false),
     };
-    let ty = ColType::ALL.iter().find(|(k, _)| *k == ty).ok_or_else(bad)?.1;
+    let ty = ColType::ALL.iter().find(|(k, _)| k.eq_ignore_ascii_case(ty)).ok_or_else(bad)?.1;
     if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
         return Err(bad());
     }
@@ -997,10 +995,15 @@ fn path(src: &str) -> Result<(Vec<Seg>, Vec<FieldDecl>), String> {
     let segs = rest.split('/').filter(|s| !rest.is_empty() || !s.is_empty()).map(|s| match s.strip_prefix(':') {
         Some(p) => param(p, false).map(Seg::Param),
         None if s.is_empty() || s.contains(['{', '}', ':', '*']) => Err(format!("“{s}” can't be a path segment in “{path}”")),
-        None => Ok(Seg::Lit(s.into())),
+        None => Ok(Seg::Lit(s.to_lowercase())),
     });
     let query = query.split('&').filter(|q| !q.is_empty()).map(|q| param(q, true));
     Ok((segs.collect::<Result<_, _>>()?, query.collect::<Result<_, _>>()?))
+}
+
+/// An HTTP verb, whatever its case, as naga spells it: `get` → `GET`.
+fn verb(s: &str) -> Option<&'static str> {
+    VERBS.iter().copied().find(|v| v.eq_ignore_ascii_case(s))
 }
 
 /// The byte range of the first word at or after `from`.
@@ -1023,7 +1026,7 @@ fn run(lines: &[String], ch: &[usize]) -> R<Run> {
     for &li in &ch[1..] {
         let first = strip_comment(&lines[li]).split_whitespace().next().unwrap_or("");
         match groups.last_mut() {
-            Some(g) if !VERBS.contains(&first) => g.push(li),
+            Some(g) if verb(first).is_none() => g.push(li),
             _ => groups.push(vec![li]),
         }
     }
@@ -1040,10 +1043,9 @@ fn request(lines: &[String], g: &[usize]) -> R<Request> {
     let line = g[0] + 1;
     let col = |i: usize| first[..i].encode_utf16().count();
     let (va, vb) = word_at(first, 0);
-    let verb = &first[va..vb];
-    if !VERBS.contains(&verb) {
+    let Some(verb) = verb(&first[va..vb]) else {
         return serr(format!("a request starts with a verb: {}", VERBS.join(", ")), Some((line, col(va))));
-    }
+    };
     let (pa, pb) = word_at(first, vb);
     let path = &first[pa..pb];
     if !path.starts_with('/') {
@@ -1091,9 +1093,8 @@ fn route(lines: &[String], ch: &[usize]) -> R<Route> {
     let mut ts = Ts { t: toks, i: 0, lines };
     ts.next();
     let v = ts.next();
-    let verb = match id_of(&v) {
-        Some(v) if VERBS.contains(&&**v) => v.clone(),
-        _ => return ts.err(format!("a route starts with a verb: {}", VERBS.join(", ")), v.as_ref()),
+    let Some(verb) = id_of(&v).and_then(|v| verb(v)).map(Name::from) else {
+        return ts.err(format!("a route starts with a verb: {}", VERBS.join(", ")), v.as_ref());
     };
     if src.is_empty() {
         return serr(format!("route {verb} needs a path, like /accounts/:id:Int"), Some((line, col)));
@@ -1118,12 +1119,15 @@ fn route(lines: &[String], ch: &[usize]) -> R<Route> {
 }
 
 fn chunk(p: &mut Program, lines: &[String], ch: &[usize]) -> R<()> {
-    if strip_comment(&lines[ch[0]]).strip_prefix("run").is_some_and(|r| r.trim_start().starts_with('"')) {
+    let head_line = strip_comment(&lines[ch[0]]);
+    if head_line.get(..3).is_some_and(|h| h.eq_ignore_ascii_case("run")) && head_line[3..].trim_start().starts_with('"') {
         p.runs.push(run(lines, ch)?);
         return Ok(());
     }
     let mut head = strip_comment(&lines[ch[0]]).split_whitespace();
-    if head.next() == Some("route") && head.next().is_some_and(|v| v.chars().all(|c| c.is_ascii_uppercase())) {
+    // `route …` declares a route, unless it defines a word called route
+    let defines = |w: &str| w == "=" || w.starts_with('{') || w.eq_ignore_ascii_case("when");
+    if head.next().is_some_and(|w| w.eq_ignore_ascii_case("route")) && head.next().is_some_and(|w| !defines(w)) {
         p.routes.push(route(lines, ch)?);
         return Ok(());
     }

@@ -1,2 +1,2 @@
-main = +{s: Open} g
-g {s: Done} = nop
+main = +{s: :open} g
+g {s: :done} = nop

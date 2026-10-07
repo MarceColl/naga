@@ -332,7 +332,7 @@ impl Route {
         let mut out = vec![];
         for (seg, part) in self.segs.iter().zip(parts) {
             match seg {
-                Seg::Lit(l) if l == part => {}
+                Seg::Lit(l) if l.eq_ignore_ascii_case(part) => {}
                 Seg::Lit(_) => return None,
                 Seg::Param(d) => out.push((d.name.to_string(), decode(part, false))),
             }

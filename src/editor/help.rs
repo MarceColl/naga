@@ -3,7 +3,7 @@
 
 pub const TEXT: &str = r#"# The idea
 A record flows through words. Each word takes the record and gives one back; words written
-one after another run left to right.
+one after another run left to right. Names ignore case: GET-NOTE is get-note.
   main = +{n: 3} countdown
 
 # Words and clauses
@@ -15,7 +15,7 @@ Patterns look at the record:
   {f}	f is there
   {-f}	f is there, and the clause takes it out
   {!f}	f isn't there  (also {¬f})
-  {f: Asset}	f is that value
+  {f: :asset}	f is that constant
   {f: {g}}	f is a record with g
 
 # Steps
@@ -52,16 +52,17 @@ Patterns look at the record:
   a /\ b	meet: the fields they share (⊓)
   a <: b	a is within b (⊑)
   a // b	a with b's fields over it (⫽)
+  :asset	a constant: a name used as a value (any case: :Asset is :asset)
 Functions: len sum min max abs round floor ceil head tail last push reverse range str keys
 
 # Tables
   table accounts :: {name: Text, kind: Const, memo: Text?}
-  seed accounts = [{name: "Cash", kind: Asset}]
+  seed accounts = [{name: "Cash", kind: :asset}]
 Types: Int Num Text Bool Const Json, with ? for optional. Every row also has an id.
 The row field is the table's name in the singular: accounts → account.
   accounts.all	all rows, in `accounts`
   accounts.get	by `id`: leaves `account`, or `missing`
-  accounts.where {kind: Asset} when balance > 0	matching rows, in `accounts`
+  accounts.where {kind: :asset} when balance > 0	matching rows, in `accounts`
   accounts.insert	stores `account` and sets its id
   accounts.update	`id` and `changes`: leaves `account`, or `missing`
   accounts.delete	by `id`: leaves `deleted`, or `missing`
@@ -73,7 +74,8 @@ In a where, columns are bare and the record is ^x.
   route GET    /reports?from:Text&to:Text?           = get-report
 Path and query params land at the top level, the JSON body in `body`, the time in `time`.
 Nested bodies work: {lines: [{sku: Const, qty: Int}]}. A bad request gets a 400 before the
-word runs. The word leaves {status, json}.
+word runs. The word leaves {status, json}. A Const field takes a JSON string ("Asset" → :asset)
+and goes back out as one ("asset").
 
 # Runs
 Requests the program must answer, checked on every change.

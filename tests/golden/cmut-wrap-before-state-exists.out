@@ -1,5 +1,5 @@
 run error after 6 steps: needs field tier @24
-subj {time: "2026-10-01", name: "Ana", email: "ana@x.com", plan: Free, state: Active}
+subj {time: "2026-10-01", name: "Ana", email: "ana@x.com", plan: :free, state: :active}
 pause error
 sql [-1] CREATE TABLE "customers" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL, "email" TEXT NOT NULL, "plan" TEXT NOT NULL, "state" TEXT NOT NULL)
 sql [-1] CREATE TABLE "revisions" ("id" INTEGER PRIMARY KEY, "customer-id" INTEGER NOT NULL, "at" TEXT NOT NULL, "change" TEXT NOT NULL)

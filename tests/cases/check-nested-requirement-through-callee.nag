@@ -1,2 +1,2 @@
-main = +{card: {kind: Visa}} charge
+main = +{card: {kind: :visa}} charge
 charge = @card( balance-1 )

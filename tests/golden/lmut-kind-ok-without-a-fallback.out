@@ -1,23 +1,23 @@
-run error after 37 steps: no clause of kind-ok matches {name: "Pets", kind: Animal} @68
-  why kind-ok {kind: Asset} — kind is Animal, not Asset
-  why kind-ok {kind: Liability} — kind is Animal, not Liability
-  why kind-ok {kind: Income} — kind is Animal, not Income
-  why kind-ok {kind: Expense} — kind is Animal, not Expense
-  why kind-ok {kind: Equity} — kind is Animal, not Equity
-> 200  {id: 1, name: "Checking", kind: Asset, archived: false, balance: 440000, recent: [{id: 1, tx-id: 1, account-id: 1, amount: 250000, date: "2026-09-01"}, {id: 3, tx-id: 2, account-id: 1, amount: 310000, date: "2026-09-25"}, {id: 6, tx-id: 3, account-id: 1, amount: -120000, date: "2026-09-27"}]}
-> 201  {id: 8, name: "Restaurants", kind: Expense, archived: false}
-subj {name: "Pets", kind: Animal}
+run error after 37 steps: no clause of kind-ok matches {name: "Pets", kind: :animal} @68
+  why kind-ok {kind: :asset} — kind is :animal, not :asset
+  why kind-ok {kind: :liability} — kind is :animal, not :liability
+  why kind-ok {kind: :income} — kind is :animal, not :income
+  why kind-ok {kind: :expense} — kind is :animal, not :expense
+  why kind-ok {kind: :equity} — kind is :animal, not :equity
+> 200  {id: 1, name: "Checking", kind: :asset, archived: false, balance: 440000, recent: [{id: 1, tx-id: 1, account-id: 1, amount: 250000, date: "2026-09-01"}, {id: 3, tx-id: 2, account-id: 1, amount: 310000, date: "2026-09-25"}, {id: 6, tx-id: 3, account-id: 1, amount: -120000, date: "2026-09-27"}]}
+> 201  {id: 8, name: "Restaurants", kind: :expense, archived: false}
+subj {name: "Pets", kind: :animal}
 pause error
 sql [-1] CREATE TABLE "accounts" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL, "kind" TEXT NOT NULL, "archived" INTEGER NOT NULL)
 sql [-1] CREATE TABLE "transactions" ("id" INTEGER PRIMARY KEY, "date" TEXT NOT NULL, "payee" TEXT NOT NULL, "memo" TEXT)
 sql [-1] CREATE TABLE "postings" ("id" INTEGER PRIMARY KEY, "tx-id" INTEGER NOT NULL, "account-id" INTEGER NOT NULL, "amount" REAL NOT NULL, "date" TEXT NOT NULL)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Checking', 'Asset', 0)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Savings', 'Asset', 0)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Credit card', 'Liability', 0)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Salary', 'Income', 0)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Groceries', 'Expense', 0)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Rent', 'Expense', 0)
-sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Opening balances', 'Equity', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Checking', 'asset', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Savings', 'asset', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Credit card', 'liability', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Salary', 'income', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Groceries', 'expense', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Rent', 'expense', 0)
+sql [-1] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Opening balances', 'equity', 0)
 sql [-1] INSERT INTO "transactions" ("date", "payee") VALUES ('2026-09-01', 'Opening balance')
 sql [-1] INSERT INTO "transactions" ("date", "payee") VALUES ('2026-09-25', 'Acme Payroll')
 sql [-1] INSERT INTO "transactions" ("date", "payee") VALUES ('2026-09-27', 'Landlord')
@@ -30,7 +30,7 @@ sql [-1] INSERT INTO "postings" ("tx-id", "account-id", "amount", "date") VALUES
 sql [3] SELECT * FROM "accounts" WHERE "id" = 1
 sql [7] SELECT * FROM "postings" WHERE ("account-id" = 1) ORDER BY "id"
 sql [11] SELECT * FROM "postings" WHERE ("account-id" = 1) ORDER BY "id"
-sql [26] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Restaurants', 'Expense', 0)
+sql [26] INSERT INTO "accounts" ("name", "kind", "archived") VALUES ('Restaurants', 'expense', 0)
 check 1 errors
   ✗ 68:43 no clause of kind-ok matches {..b, name, kind}
 sig main : {..r, ¬account, ¬id, ¬json, ¬missing, ¬status} → {}
@@ -48,11 +48,11 @@ sig post-account : {..r, body: {..b, kind, name, problem}, ¬json, ¬status} →
 sig post-account : {..r, body: {..b, kind, name, ¬problem}, ¬account, ¬json, ¬status} → {status: Num, json: {id: Num, name: Text, kind: Const, archived: Bool}}
 sig post-account : {..r, body: {..b, kind, name}} → ✗ stops with an error (see Notes)
 sig post-account : {..r, ¬json, ¬status} → {status: Num, json: Text}
-sig kind-ok : {..r, kind: Asset} → {..r, kind: Asset}
-sig kind-ok : {..r, kind: Liability} → {..r, kind: Liability}
-sig kind-ok : {..r, kind: Income} → {..r, kind: Income}
-sig kind-ok : {..r, kind: Expense} → {..r, kind: Expense}
-sig kind-ok : {..r, kind: Equity} → {..r, kind: Equity}
+sig kind-ok : {..r, kind: :asset} → {..r, kind: :asset}
+sig kind-ok : {..r, kind: :liability} → {..r, kind: :liability}
+sig kind-ok : {..r, kind: :income} → {..r, kind: :income}
+sig kind-ok : {..r, kind: :expense} → {..r, kind: :expense}
+sig kind-ok : {..r, kind: :equity} → {..r, kind: :equity}
 sig create-account : {..r, body: {..b, problem}, ¬json, ¬status} → {..r, status: Num, json, body: {..b, problem}}
 sig create-account : {..r, body: {..b, kind: Const, name: Text}, ¬account, ¬json, ¬status} → {..r, account: {id: Num, name: Text, kind: Const, archived: Bool}, status: Num, json: {id: Num, name: Text, kind: Const, archived: Bool}, body: {..b, name: Text, kind: Const}}
 sig patch-account : {..r, body: {..b ⊆ accounts}, id: Num, ¬account, ¬changes, ¬json, ¬missing, ¬status} → {status: Num, json: {id: Num, name: Text, kind: Const, archived: Bool}} | {status: Num, json: Text}

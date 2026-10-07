@@ -1,12 +1,12 @@
 run error after 26 steps: customers.state is required, so it can't be set to nil @35
-> 201  {id: 1, name: "Ana", email: "ana@x.com", plan: Free, state: Active}
-subj {time: "2026-10-03", id: 1, change: {id: {same: 1}, name: {same: "Ana"}, email: {same: "ana@x.com"}, plan: {same: Free}, state: {del: Active}}, changes: {id: {same: 1}, name: {same: "Ana"}, email: {same: "ana@x.com"}, plan: {same: Free}, state: {del: Active}}}
+> 201  {id: 1, name: "Ana", email: "ana@x.com", plan: :free, state: :active}
+subj {time: "2026-10-03", id: 1, change: {id: {same: 1}, name: {same: "Ana"}, email: {same: "ana@x.com"}, plan: {same: :free}, state: {del: :active}}, changes: {id: {same: 1}, name: {same: "Ana"}, email: {same: "ana@x.com"}, plan: {same: :free}, state: {del: :active}}}
 pause error
 sql [-1] CREATE TABLE "customers" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL, "email" TEXT NOT NULL, "plan" TEXT NOT NULL, "state" TEXT NOT NULL)
 sql [-1] CREATE TABLE "revisions" ("id" INTEGER PRIMARY KEY, "customer-id" INTEGER NOT NULL, "at" TEXT NOT NULL, "change" TEXT NOT NULL)
 sql [-1] CREATE TABLE "events" ("id" INTEGER PRIMARY KEY, "key" TEXT NOT NULL, "customer-id" INTEGER NOT NULL, "metric" TEXT NOT NULL, "qty" REAL NOT NULL)
-sql [6] INSERT INTO "customers" ("name", "email", "plan", "state") VALUES ('Ana', 'ana@x.com', 'Free', 'Active')
-sql [10] INSERT INTO "revisions" ("customer-id", "at", "change") VALUES (1, '2026-10-01', '{"id":{"add":1},"name":{"add":"Ana"},"email":{"add":"ana@x.com"},"plan":{"add":{"$sym":"Free"}},"state":{"add":{"$sym":"Active"}}}')
+sql [6] INSERT INTO "customers" ("name", "email", "plan", "state") VALUES ('Ana', 'ana@x.com', 'free', 'active')
+sql [10] INSERT INTO "revisions" ("customer-id", "at", "change") VALUES (1, '2026-10-01', '{"id":{"add":1},"name":{"add":"Ana"},"email":{"add":"ana@x.com"},"plan":{"add":{"$sym":"free"}},"state":{"add":{"$sym":"active"}}}')
 sql [20] SELECT * FROM "customers" WHERE "id" = 1
 check 1 errors
   ✗ 30:31 patched would clear state in customers: the new side of the change set leaves it out, and customers.state is required

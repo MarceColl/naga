@@ -1,7 +1,7 @@
 run done after 6 steps
 > 8
-> [1, "a", {b: Nil}]
-> [z, a]
+> [1, "a", {b: :nil}]
+> [:z, :a]
 > [0, 1, 2]
 > [1.5, 2.5, 3.5]
 subj {}

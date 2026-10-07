@@ -17,8 +17,9 @@ pub struct Fill {
 /// The language, briefly; the program itself is the best teacher.
 const SYSTEM: &str = r#"You write code in naga, a Forth where a record flows through words.
 
+- Names ignore case. Constants are `:name` (`{kind: :asset}`, `kind == :asset`); strings are "text".
 - A word is `name = steps`, or several clauses `name {pattern} when guard = steps` tried top to bottom; the first that matches runs.
-- Patterns: `{f}` needs field f, `{-f}` needs it and removes it, `{¬f}` needs it absent, `{f: Lit}` matches a value, nested `{f: {g}}`.
+- Patterns: `{f}` needs field f, `{-f}` needs it and removes it, `{¬f}` needs it absent, `{f: :asset}` matches a value, nested `{f: {g}}`.
 - Steps run left to right on the record: `+{f: expr}` adds (f must be absent), `-{f, g}` removes, `.{f g}` keeps only those, `f=expr` sets, `f+1` bumps, `a→b` renames, `⊃f` lifts f's fields up, `⊂f{a b}` packs fields into f, `⫽{…}` overrides, `⊔{…}` fills absent fields.
 - `@f( steps )` runs steps inside record f, or on every item when f is a list. `( a ‖ b )` runs both on the same record and merges what they add.
 - `^x` reads x from the record one focus out, `^^x` two out. Expressions: + - * / %, == ≠ < > ≤ ≥, and or not, ++ for lists and text, len sum min max head tail last str, "text {expr}" interpolation.

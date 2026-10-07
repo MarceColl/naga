@@ -1,11 +1,11 @@
 run error after 5 steps: ⊃body: plan is already there @24
-subj {time: "2026-10-01", body: {name: "Ana", email: "ana@x.com", plan: Free}, plan: Free}
+subj {time: "2026-10-01", body: {name: "Ana", email: "ana@x.com", plan: :free}, plan: :free}
 pause error
 sql [-1] CREATE TABLE "customers" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL, "email" TEXT NOT NULL, "plan" TEXT NOT NULL, "state" TEXT NOT NULL)
 sql [-1] CREATE TABLE "revisions" ("id" INTEGER PRIMARY KEY, "customer-id" INTEGER NOT NULL, "at" TEXT NOT NULL, "change" TEXT NOT NULL)
 sql [-1] CREATE TABLE "events" ("id" INTEGER PRIMARY KEY, "key" TEXT NOT NULL, "customer-id" INTEGER NOT NULL, "metric" TEXT NOT NULL, "qty" REAL NOT NULL)
 check 1 errors
-  ✗ 24:16 ⊃body: both records have plan
+  ✗ 24:17 ⊃body: both records have plan
 sig main : {..r, ¬body, ¬time} → ✗ stops with an error (see Notes)
 sig show-reply : {..r, json, status} → {}
 sig reply : {..r, json, status} → {status, json}

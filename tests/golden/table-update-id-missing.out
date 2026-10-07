@@ -3,7 +3,7 @@ run done after 4 steps
 subj {id: 7, missing: true}
 pause done
 sql [-1] CREATE TABLE "todos" ("id" INTEGER PRIMARY KEY, "title" TEXT NOT NULL, "done" INTEGER NOT NULL, "tags" TEXT, "status" TEXT NOT NULL)
-sql [-1] INSERT INTO "todos" ("title", "done", "tags", "status") VALUES ('a', 0, '[1,"x"]', 'Open')
+sql [-1] INSERT INTO "todos" ("title", "done", "tags", "status") VALUES ('a', 0, '[1,"x"]', 'open')
 sql [2] UPDATE "todos" SET "done" = 1 WHERE "id" = 7
 check 0 errors
 sig main : {..r, ¬changes, ¬id, ¬missing, ¬todo} → {..r, id: Num, todo: {id: Num, title: Text, done: Bool, tags?, status: Const}} | {..r, id: Num, missing: Bool}

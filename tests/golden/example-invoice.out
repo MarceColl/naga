@@ -1,59 +1,59 @@
 run done after 31 steps
 > invoice 7: declined, retry 1
 > invoice 7 paid at step 28
-subj {id: 7, total: 120, card: {kind: Visa, balance: 10}, paidAt: 28}
+subj {id: 7, total: 120, card: {kind: :visa, balance: 10}, paidat: 28}
 pause done
 check 0 errors
-sig main : {..r, ¬amount, ¬card, ¬due, ¬id, ¬ok, ¬paidAt, ¬total, ¬tries} → {..r, id: Num, total: Num, card: {kind: Visa, balance: Num}, paidAt: Num}
-sig main : {..r, ok, ¬amount, ¬card, ¬declined, ¬due, ¬id, ¬paidAt, ¬total, ¬tries} → {..r, id: Num, total: Num, card: {kind: Visa, balance: Num}, declined: Insufficient, paidAt: Num}
-sig main : {..r, ¬ok, ¬amount, ¬card, ¬declined, ¬due, ¬id, ¬paidAt, ¬total, ¬tries} → {..r, id: Num, total: Num, card: {kind: Visa, balance: Num}, paidAt: Num}
+sig main : {..r, ¬amount, ¬card, ¬due, ¬id, ¬ok, ¬paidat, ¬total, ¬tries} → {..r, id: Num, total: Num, card: {kind: :visa, balance: Num}, paidat: Num}
+sig main : {..r, ok, ¬amount, ¬card, ¬declined, ¬due, ¬id, ¬paidat, ¬total, ¬tries} → {..r, id: Num, total: Num, card: {kind: :visa, balance: Num}, declined: :insufficient, paidat: Num}
+sig main : {..r, ¬ok, ¬amount, ¬card, ¬declined, ¬due, ¬id, ¬paidat, ¬total, ¬tries} → {..r, id: Num, total: Num, card: {kind: :visa, balance: Num}, paidat: Num}
 sig main : {..r, ¬ok, ¬amount, ¬card, ¬declined, ¬due, ¬id, ¬total, ¬tries} → never returns
-sig main : {..r, ¬ok, ¬amount, ¬card, ¬declined, ¬due, ¬id, ¬total, ¬tries, ¬voidedAt} → {..r, id: Num, total: Num, card: {kind: Visa, balance: Num}, voidedAt: Num}
-sig invoice : {..r, card, id, total, ¬amount, ¬due, ¬ok, ¬paidAt, ¬tries} → {..r, card: {..c, balance: Num}, paidAt: Num, total, id}
-sig invoice : {..r, card, ok, id, total, ¬amount, ¬declined, ¬due, ¬paidAt, ¬tries} → {..r, declined: Insufficient, paidAt: Num, total, id}
+sig main : {..r, ¬ok, ¬amount, ¬card, ¬declined, ¬due, ¬id, ¬total, ¬tries, ¬voidedat} → {..r, id: Num, total: Num, card: {kind: :visa, balance: Num}, voidedat: Num}
+sig invoice : {..r, card, id, total, ¬amount, ¬due, ¬ok, ¬paidat, ¬tries} → {..r, card: {..c, balance: Num}, paidat: Num, total, id}
+sig invoice : {..r, card, ok, id, total, ¬amount, ¬declined, ¬due, ¬paidat, ¬tries} → {..r, declined: :insufficient, paidat: Num, total, id}
 sig invoice : {..r, card: [{.., balance: Num}], ¬ok, id, total, ¬amount, ¬declined, ¬due, ¬tries} → never returns
-sig invoice : {..r, card: [{.., balance: Num}], ¬ok, id, total, ¬amount, ¬declined, ¬due, ¬tries, ¬voidedAt} → {..r, card: [{..c, balance: Num}], voidedAt: Num, id, total}
-sig invoice : {..r, card: {..c, balance: Num}, ¬ok, id, total, ¬amount, ¬declined, ¬due, ¬paidAt, ¬tries} → {..r, card: {..c, balance: Num}, paidAt: Num, id, total}
+sig invoice : {..r, card: [{.., balance: Num}], ¬ok, id, total, ¬amount, ¬declined, ¬due, ¬tries, ¬voidedat} → {..r, card: [{..c, balance: Num}], voidedat: Num, id, total}
+sig invoice : {..r, card: {..c, balance: Num}, ¬ok, id, total, ¬amount, ¬declined, ¬due, ¬paidat, ¬tries} → {..r, card: {..c, balance: Num}, paidat: Num, id, total}
 sig invoice : {..r, card: {..c, balance: Num}, ¬ok, id, total, ¬amount, ¬declined, ¬due, ¬tries} → never returns
-sig invoice : {..r, card: {..c, balance: Num}, ¬ok, id, total, ¬amount, ¬declined, ¬due, ¬tries, ¬voidedAt} → {..r, card: {..c, balance: Num}, voidedAt: Num, id, total}
-sig invoice : {..r, card, ¬ok, id, total, ¬amount, ¬declined, ¬due, ¬tries, ¬voidedAt} → {..r, voidedAt: Num, total, id}
-sig invoice : {..r, ¬card, ok, id, ¬declined, ¬due, ¬paidAt, ¬tries} → {..r, declined: NoCard, paidAt: Num, id}
+sig invoice : {..r, card: {..c, balance: Num}, ¬ok, id, total, ¬amount, ¬declined, ¬due, ¬tries, ¬voidedat} → {..r, card: {..c, balance: Num}, voidedat: Num, id, total}
+sig invoice : {..r, card, ¬ok, id, total, ¬amount, ¬declined, ¬due, ¬tries, ¬voidedat} → {..r, voidedat: Num, total, id}
+sig invoice : {..r, ¬card, ok, id, ¬declined, ¬due, ¬paidat, ¬tries} → {..r, declined: :nocard, paidat: Num, id}
 sig invoice : {..r, ¬card, ¬ok, ¬due, ¬tries} → ✗ wait needs card — the record here is {..r, tries: Num, ¬card, ¬declined}
-sig invoice : {..r, ¬card, ¬ok, id, ¬declined, ¬due, ¬tries, ¬voidedAt} → {..r, voidedAt: Num, id}
+sig invoice : {..r, ¬card, ¬ok, id, ¬declined, ¬due, ¬tries, ¬voidedat} → {..r, voidedat: Num, id}
 sig finalize : {..r, ¬due, ¬tries} → {..r, due: Num, tries: Num}
-sig collect : {..r, card, due, total, tries, ¬amount, ¬ok, ¬paidAt} → {..r, card: {..c, balance: Num}, paidAt: Num, total}
-sig collect : {..r, card, ok, due, total, tries, ¬amount, ¬declined, ¬paidAt} → {..r, declined: Insufficient, paidAt: Num, total}
+sig collect : {..r, card, due, total, tries, ¬amount, ¬ok, ¬paidat} → {..r, card: {..c, balance: Num}, paidat: Num, total}
+sig collect : {..r, card, ok, due, total, tries, ¬amount, ¬declined, ¬paidat} → {..r, declined: :insufficient, paidat: Num, total}
 sig collect : {..r, card: [{.., balance: Num}], ¬ok, tries, id, total, ¬amount, ¬declined} → never returns
-sig collect : {..r, card: [{.., balance: Num}], ¬ok, tries, due, id, total, ¬amount, ¬declined, ¬voidedAt} → {..r, card: [{..c, balance: Num}], voidedAt: Num, total, id}
-sig collect : {..r, card: {..c, balance: Num}, ¬ok, tries, due, id, total, ¬amount, ¬declined, ¬paidAt} → {..r, card: {..c, balance: Num}, paidAt: Num, total, id}
+sig collect : {..r, card: [{.., balance: Num}], ¬ok, tries, due, id, total, ¬amount, ¬declined, ¬voidedat} → {..r, card: [{..c, balance: Num}], voidedat: Num, total, id}
+sig collect : {..r, card: {..c, balance: Num}, ¬ok, tries, due, id, total, ¬amount, ¬declined, ¬paidat} → {..r, card: {..c, balance: Num}, paidat: Num, total, id}
 sig collect : {..r, card: {..c, balance: Num}, ¬ok, tries, id, total, ¬amount, ¬declined} → never returns
-sig collect : {..r, card: {..c, balance: Num}, ¬ok, tries, due, id, total, ¬amount, ¬declined, ¬voidedAt} → {..r, card: {..c, balance: Num}, voidedAt: Num, total, id}
-sig collect : {..r, card, ¬ok, tries, due, total, ¬amount, ¬declined, ¬voidedAt} → {..r, voidedAt: Num, total}
-sig collect : {..r, card, ¬ok, ¬tries, total, ¬amount, ¬declined} → ✗ settle needs tries — the record here is {..r, declined: Insufficient, card, total, due, ¬amount, ¬ok, ¬tries} (void reads it)
-sig collect : {..r, ¬card, ok, due, tries, ¬declined, ¬paidAt} → {..r, declined: NoCard, paidAt: Num}
+sig collect : {..r, card: {..c, balance: Num}, ¬ok, tries, due, id, total, ¬amount, ¬declined, ¬voidedat} → {..r, card: {..c, balance: Num}, voidedat: Num, total, id}
+sig collect : {..r, card, ¬ok, tries, due, total, ¬amount, ¬declined, ¬voidedat} → {..r, voidedat: Num, total}
+sig collect : {..r, card, ¬ok, ¬tries, total, ¬amount, ¬declined} → ✗ settle needs tries — the record here is {..r, declined: :insufficient, card, total, due, ¬amount, ¬ok, ¬tries} (void reads it)
+sig collect : {..r, ¬card, ok, due, tries, ¬declined, ¬paidat} → {..r, declined: :nocard, paidat: Num}
 sig collect : {..r, ¬card, ¬ok, tries, ¬declined} → ✗ wait needs card — the record here is {..r, tries: Num, ¬card, ¬declined}
-sig collect : {..r, ¬card, ¬ok, tries, due, ¬declined, ¬voidedAt} → {..r, voidedAt: Num}
-sig collect : {..r, ¬card, ¬ok, ¬tries, ¬declined} → ✗ settle needs tries — the record here is {..r, declined: NoCard, due, ¬card, ¬ok, ¬tries} (void reads it)
-sig charge : {..r, card, total, ¬amount, ¬ok} → {..r, card: {..c, balance: Num}, ok: Approved, total}
-sig charge : {..r, card, total, ¬amount, ¬declined} → {..r, declined: Insufficient, card: {..c}, total}
-sig charge : {..r, ¬declined} → {..r, declined: NoCard}
-sig gateway : {..r, amount, card: {..c, balance}, ¬ok} → {..r, card: {..c, balance: Num}, ok: Approved}   (guarded)
-sig gateway : {..r, amount, ¬declined} → {..r, declined: Insufficient}
-sig settle : {..r, ok, due, tries, ¬paidAt} → {..r, paidAt: Num}
-sig settle : {..r, declined, tries, card: [{.., balance: Num}], ok, due, id, total, ¬amount, ¬paidAt} → {..r, card: [{..c, balance: Num}], declined: Insufficient, paidAt: Num, id, total}   (guarded)
+sig collect : {..r, ¬card, ¬ok, tries, due, ¬declined, ¬voidedat} → {..r, voidedat: Num}
+sig collect : {..r, ¬card, ¬ok, ¬tries, ¬declined} → ✗ settle needs tries — the record here is {..r, declined: :nocard, due, ¬card, ¬ok, ¬tries} (void reads it)
+sig charge : {..r, card, total, ¬amount, ¬ok} → {..r, card: {..c, balance: Num}, ok: :approved, total}
+sig charge : {..r, card, total, ¬amount, ¬declined} → {..r, declined: :insufficient, card: {..c}, total}
+sig charge : {..r, ¬declined} → {..r, declined: :nocard}
+sig gateway : {..r, amount, card: {..c, balance}, ¬ok} → {..r, card: {..c, balance: Num}, ok: :approved}   (guarded)
+sig gateway : {..r, amount, ¬declined} → {..r, declined: :insufficient}
+sig settle : {..r, ok, due, tries, ¬paidat} → {..r, paidat: Num}
+sig settle : {..r, declined, tries, card: [{.., balance: Num}], ok, due, id, total, ¬amount, ¬paidat} → {..r, card: [{..c, balance: Num}], declined: :insufficient, paidat: Num, id, total}   (guarded)
 sig settle : {..r, declined, tries, card: [{.., balance: Num}], ¬ok, id, total, ¬amount} → never returns   (guarded)
-sig settle : {..r, declined, tries, card: [{.., balance: Num}], ¬ok, due, id, total, ¬amount, ¬voidedAt} → {..r, card: [{..c, balance: Num}], voidedAt: Num, id, total}   (guarded)
-sig settle : {..r, declined, tries, card: {..c, balance: Num}, due, id, total, ¬amount, ¬ok, ¬paidAt} → {..r, card: {..c, balance: Num}, paidAt: Num, id, total}   (guarded)
-sig settle : {..r, declined, tries, card: {..c, balance: Num}, ok, due, id, total, ¬amount, ¬paidAt} → {..r, card: {..c, balance: Num}, declined: Insufficient, paidAt: Num, id, total}   (guarded)
-sig settle : {..r, declined, tries, card: {..c, balance: Num}, ¬ok, due, id, total, ¬amount, ¬paidAt} → {..r, card: {..c, balance: Num}, paidAt: Num, id, total}   (guarded)
+sig settle : {..r, declined, tries, card: [{.., balance: Num}], ¬ok, due, id, total, ¬amount, ¬voidedat} → {..r, card: [{..c, balance: Num}], voidedat: Num, id, total}   (guarded)
+sig settle : {..r, declined, tries, card: {..c, balance: Num}, due, id, total, ¬amount, ¬ok, ¬paidat} → {..r, card: {..c, balance: Num}, paidat: Num, id, total}   (guarded)
+sig settle : {..r, declined, tries, card: {..c, balance: Num}, ok, due, id, total, ¬amount, ¬paidat} → {..r, card: {..c, balance: Num}, declined: :insufficient, paidat: Num, id, total}   (guarded)
+sig settle : {..r, declined, tries, card: {..c, balance: Num}, ¬ok, due, id, total, ¬amount, ¬paidat} → {..r, card: {..c, balance: Num}, paidat: Num, id, total}   (guarded)
 sig settle : {..r, declined, tries, card: {..c, balance: Num}, ¬ok, id, total, ¬amount} → never returns   (guarded)
-sig settle : {..r, declined, tries, card: {..c, balance: Num}, ¬ok, due, id, total, ¬amount, ¬voidedAt} → {..r, card: {..c, balance: Num}, voidedAt: Num, id, total}   (guarded)
+sig settle : {..r, declined, tries, card: {..c, balance: Num}, ¬ok, due, id, total, ¬amount, ¬voidedat} → {..r, card: {..c, balance: Num}, voidedat: Num, id, total}   (guarded)
 sig settle : {..r, declined, tries, ¬card} → ✗ wait needs card — the record here is {..r, tries: Num, ¬card, ¬declined}   (guarded)
-sig settle : {..r, declined, due, tries, ¬voidedAt} → {..r, voidedAt: Num}
+sig settle : {..r, declined, due, tries, ¬voidedat} → {..r, voidedat: Num}
 sig fail : {..r, tries: Num} → {..r, tries: Num}
 sig wait : {..r, card: [{.., balance: Num}], id, tries} → {..r, card: [{..c, balance: Num}], id, tries}
 sig wait : {..r, card: {..c, balance: Num}, id, tries} → {..r, card: {..c, balance: Num}, id, tries}
-sig paid : {..r, due, tries, ¬paidAt} → {..r, paidAt: Num}
-sig void : {..r, due, tries, ¬voidedAt} → {..r, voidedAt: Num}
-sig report : {..r, paidAt, id} → {..r, paidAt, id}
-sig report : {..r, voidedAt, id} → {..r, voidedAt, id}
+sig paid : {..r, due, tries, ¬paidat} → {..r, paidat: Num}
+sig void : {..r, due, tries, ¬voidedat} → {..r, voidedat: Num}
+sig report : {..r, paidat, id} → {..r, paidat, id}
+sig report : {..r, voidedat, id} → {..r, voidedat, id}

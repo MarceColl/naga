@@ -125,8 +125,8 @@ enum Class {
     Pun,
 }
 
-const KEYWORDS: [&str; 18] =
-    ["when", "say", "show", "raise", "break", "nop", "now", "and", "or", "not", "true", "false", "nil", "wrap", "unwrap", "table", "seed", "route"];
+const KEYWORDS: [&str; 19] =
+    ["when", "say", "show", "raise", "break", "nop", "now", "and", "or", "not", "true", "false", "nil", "wrap", "unwrap", "table", "seed", "route", "live"];
 const GLYPHS: [char; 10] = ['‖', '→', '⊂', '⊃', '⫽', '⊔', '⊓', '⊑', '∆', '⍎'];
 
 fn id_start(c: char) -> bool {

@@ -42,6 +42,8 @@ pub struct Raw {
 /// they share, a connection per request at a time.
 pub struct Live {
     program: RwLock<Arc<Program>>,
+    /// The live pages open now.
+    pub pages: crate::live::Sessions,
     db: std::path::PathBuf,
     idle: Mutex<Vec<Store>>,
 }
@@ -50,7 +52,7 @@ impl Live {
     /// The program at `db`, its tables made to fit it.
     pub fn open(p: Arc<Program>, db: &std::path::Path) -> Result<(Arc<Live>, Migration), String> {
         let (store, m) = open(&p, db)?;
-        Ok((Arc::new(Live { program: RwLock::new(p), db: db.into(), idle: Mutex::new(vec![store]) }), m))
+        Ok((Arc::new(Live { program: RwLock::new(p), pages: Default::default(), db: db.into(), idle: Mutex::new(vec![store]) }), m))
     }
 
     pub fn program(&self) -> Arc<Program> {
@@ -89,20 +91,35 @@ impl Live {
 /// The server: every request is answered by `live` on a blocking thread; `after` hears what
 /// each one got (the editor shows it, `naga serve` prints what words said).
 pub fn router(live: Arc<Live>, after: impl Fn(&Raw, &Handled) + Clone + Send + Sync + 'static) -> Router {
-    Router::new().fallback(move |method: axum::http::Method, uri: axum::http::Uri, body: String| {
-        let (live, after) = (live.clone(), after.clone());
-        async move {
-            let raw = Raw { method: method.to_string(), path: uri.path().into(), query: uri.query().unwrap_or("").into(), body };
-            let h = tokio::task::spawn_blocking(move || {
-                let h = live.answer(&raw);
-                after(&raw, &h);
-                h
-            })
-            .await
-            .unwrap_or_else(|_| Handled { status: 500, json: error("the request stopped"), stop: Status::Error, said: vec![], sql: vec![] });
-            (StatusCode::from_u16(h.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), [(header::CONTENT_TYPE, "application/json")], h.json)
-        }
-    })
+    let sockets = live.clone();
+    Router::new()
+        .route("/naga/live.js", axum::routing::get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], crate::live::SCRIPT) }))
+        .route(
+            "/naga/live",
+            axum::routing::get(move |ws: axum::extract::ws::WebSocketUpgrade, q: axum::extract::Query<std::collections::HashMap<String, String>>| {
+                let live = sockets.clone();
+                let id = q.get("s").and_then(|s| s.parse().ok()).unwrap_or(0);
+                async move { ws.on_upgrade(move |socket| crate::live::connect(live, id, socket)) }
+            }),
+        )
+        .fallback(move |method: axum::http::Method, uri: axum::http::Uri, body: String| {
+            let (live, after) = (live.clone(), after.clone());
+            async move {
+                let raw = Raw { method: method.to_string(), path: uri.path().into(), query: uri.query().unwrap_or("").into(), body };
+                // a live page answers a GET with a page; everything else is JSON
+                let (status, kind, text) = tokio::task::spawn_blocking(move || {
+                    if raw.method == "GET" && let Some((status, page)) = crate::live::mount(&live, &raw) {
+                        return (status, "text/html; charset=utf-8", page);
+                    }
+                    let h = live.answer(&raw);
+                    after(&raw, &h);
+                    (h.status, "application/json", h.json)
+                })
+                .await
+                .unwrap_or_else(|_| (500, "application/json", error("the request stopped")));
+                (StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), [(header::CONTENT_TYPE, kind)], text)
+            }
+        })
 }
 
 /// A runtime whose blocking threads have room for deep programs (the interpreter recurses).
@@ -117,7 +134,8 @@ pub fn respond(p: &Program, store: &mut Store, raw: &Raw) -> Handled {
     if let Some((route, path, query)) = p.route_for(&raw.method, &full) {
         return handle(p, store, &Req { route, path, query, body: raw.body.clone() });
     }
-    let listing = format!("[{}]", p.routes.iter().map(|r| json_str(&r.decl())).collect::<Vec<_>>().join(","));
+    let pages = p.lives.iter().map(|l| json_str(&format!("LIVE {}", l.path)));
+    let listing = format!("[{}]", p.routes.iter().map(|r| json_str(&r.decl())).chain(pages).collect::<Vec<_>>().join(","));
     let (status, json) = match (raw.method.as_str(), raw.path.as_str()) {
         ("GET", "/") => (200, format!("{{\"routes\":{listing}}}")),
         _ if p.routes.iter().any(|r| r.bind(&raw.path).is_some()) => (405, error(&format!("{} {} isn't a route; the path takes other verbs", raw.method, raw.path))),
@@ -152,8 +170,24 @@ pub fn handle(p: &Program, store: &mut Store, req: &Req) -> Handled {
         Ok(s) => s,
         Err(msg) => return Handled { status: 400, json: error(&msg), stop: Status::Done, said: vec![], sql: vec![] },
     };
+    let ran = run_word(p, store, &r.word, subj);
+    let (status, json) = ran.out.and_then(|subj| reply(&subj)).unwrap_or_else(|msg| (500, error(&msg)));
+    Handled { status, json, stop: ran.stop, said: ran.said, sql: ran.sql }
+}
+
+/// What running a word did: the record it left (or why it stopped), how it stopped, what
+/// it said and the SQL it ran.
+pub struct Ran {
+    pub out: Result<Arc<Rec>, String>,
+    pub stop: Status,
+    pub said: Vec<String>,
+    pub sql: Vec<String>,
+}
+
+/// Runs `word` on `subj` against `store`, within the step budget.
+pub fn run_word(p: &Program, store: &mut Store, word: &Name, subj: Rec) -> Ran {
     let mut log = vec![];
-    let mut s = initial(p, &r.word, Arc::new(subj));
+    let mut s = initial(p, word, Arc::new(subj));
     let mut rt = Runtime { log: &mut log, store: Some(store), store_error: None };
     for _ in 0..BUDGET {
         if s.status != Status::Ready {
@@ -163,13 +197,12 @@ pub fn handle(p: &Program, store: &mut Store, req: &Req) -> Handled {
     }
     let sql = store.log.drain(..).map(|(_, l)| l).collect();
     let out = match s.status {
-        Status::Done => reply(&s.subj),
-        Status::Error => Err(s.error.map_or_else(String::new, |e| format!("{} (line {})", e.msg, e.line))),
-        Status::Hole => Err(format!("reached a hole: {}", s.hole.unwrap_or_default())),
+        Status::Done => Ok(s.subj.clone()),
+        Status::Error => Err(s.error.clone().map_or_else(String::new, |e| format!("{} (line {})", e.msg, e.line))),
+        Status::Hole => Err(format!("reached a hole: {}", s.hole.clone().unwrap_or_default())),
         Status::Ready => Err(format!("still running after {BUDGET} steps")),
     };
-    let (status, json) = out.unwrap_or_else(|msg| (500, error(&msg)));
-    Handled { status, json, stop: s.status, said: log, sql }
+    Ran { out, stop: s.status, said: log, sql }
 }
 
 /// Path params and query fields at the top level, the body in `body`, the time in `time`.

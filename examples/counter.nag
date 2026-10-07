@@ -1,0 +1,14 @@
+-- A live page: the word runs on the page's state (on mount, the params; on a click, the state
+-- and the event) and leaves html. `naga start examples/counter.nag`, then open /counter.
+
+live /counter = counter
+
+counter {-event: {name: :inc}} = count+1 render
+counter {-event: {name: :dec}} = count-1 render
+counter {!count}               = +{count: 0} render
+counter                        = render
+
+render = +{html: [:main, {style: "font: 32px system-ui; text-align: center; margin-top: 20vh"},
+                  [:h1, "{count}"],
+                  [:button, {on-click: :dec}, "−"], " ",
+                  [:button, {on-click: :inc}, "+"]]}

@@ -425,6 +425,8 @@ pub struct Program {
     pub tables: IndexMap<Name, Table>,
     pub seeds: Vec<Seed>,
     pub routes: Vec<Route>,
+    /// Live pages: `live /counter = counter`, served as GET.
+    pub lives: Vec<Route>,
     pub runs: Vec<Run>,
     pub errors: Vec<Diag>,
     pub warnings: Vec<Diag>,

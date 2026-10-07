@@ -2,6 +2,7 @@ pub mod ast;
 pub mod check;
 pub mod editor;
 pub mod eval;
+pub mod live;
 pub mod machine;
 pub mod num;
 pub mod report;

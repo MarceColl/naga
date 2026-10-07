@@ -1077,10 +1077,11 @@ fn request(lines: &[String], g: &[usize]) -> R<Request> {
 }
 
 /// The path is read as raw text (the lexer would see `//` and `:` as operators); the rest is lexed with it blanked out.
-fn route(lines: &[String], ch: &[usize]) -> R<Route> {
+/// `route VERB PATH [body] = word`, or `live PATH = word`: a page served as GET, no body.
+fn route(lines: &[String], ch: &[usize], live: bool) -> R<Route> {
     let first = strip_comment(&lines[ch[0]]);
     let line = ch[0] + 1;
-    let (_, verb_end) = word_at(first, "route".len());
+    let (_, verb_end) = if live { (0, "live".len()) } else { word_at(first, "route".len()) };
     let (pa, pb) = word_at(first, verb_end);
     let src = &first[pa..pb];
     let col = first[..pa].encode_utf16().count();
@@ -1092,14 +1093,21 @@ fn route(lines: &[String], ch: &[usize]) -> R<Route> {
     }
     let mut ts = Ts { t: toks, i: 0, lines };
     ts.next();
-    let v = ts.next();
-    let Some(verb) = id_of(&v).and_then(|v| verb(v)).map(Name::from) else {
-        return ts.err(format!("a route starts with a verb: {}", VERBS.join(", ")), v.as_ref());
+    let verb = match live {
+        true => Name::from("GET"),
+        false => {
+            let v = ts.next();
+            let Some(verb) = id_of(&v).and_then(|v| verb(v)).map(Name::from) else {
+                return ts.err(format!("a route starts with a verb: {}", VERBS.join(", ")), v.as_ref());
+            };
+            verb
+        }
     };
     if src.is_empty() {
-        return serr(format!("route {verb} needs a path, like /accounts/:id:Int"), Some((line, col)));
+        let what = if live { "live".to_string() } else { format!("route {verb}") };
+        return serr(format!("{what} needs a path, like /counter or /accounts/:id:Int"), Some((line, col)));
     }
-    let body = if ts.is_op("{", 0) { Some(field_decls(&mut ts, false)?) } else { None };
+    let body = if ts.is_op("{", 0) && !live { Some(field_decls(&mut ts, false)?) } else { None };
     ts.expect_op("=", "before the word that answers the route")?;
     let w = ts.next();
     let Some(word) = id_of(&w).filter(|n| !is_keyword(n)).cloned() else { return ts.err("expected the word that answers the route", w.as_ref()) };
@@ -1127,8 +1135,14 @@ fn chunk(p: &mut Program, lines: &[String], ch: &[usize]) -> R<()> {
     let mut head = strip_comment(&lines[ch[0]]).split_whitespace();
     // `route …` declares a route, unless it defines a word called route
     let defines = |w: &str| w == "=" || w.starts_with('{') || w.eq_ignore_ascii_case("when");
-    if head.next().is_some_and(|w| w.eq_ignore_ascii_case("route")) && head.next().is_some_and(|w| !defines(w)) {
-        p.routes.push(route(lines, ch)?);
+    let first = head.next();
+    let declares = head.next().is_some_and(|w| !defines(w));
+    if first.is_some_and(|w| w.eq_ignore_ascii_case("route")) && declares {
+        p.routes.push(route(lines, ch, false)?);
+        return Ok(());
+    }
+    if first.is_some_and(|w| w.eq_ignore_ascii_case("live")) && declares {
+        p.lives.push(route(lines, ch, true)?);
         return Ok(());
     }
     let mut toks = vec![];
@@ -1184,6 +1198,14 @@ fn check_refs(p: &mut Program) {
     for sd in &p.seeds {
         if !p.tables.contains_key(&sd.table) {
             errors.push(Diag { line: sd.line, col: 0, msg: format!("seed {0}: there's no table called {0}", sd.table) });
+        }
+    }
+    for r in &p.lives {
+        if !p.words.contains_key(&r.word) {
+            errors.push(Diag { line: r.line, col: 0, msg: format!("live {}: {} isn't defined", r.path, r.word) });
+        }
+        if let Some(q) = p.routes.iter().chain(&p.lives).find(|q| q.line != r.line && &*q.verb == "GET" && q.shape() == r.shape()) {
+            errors.push(Diag { line: r.line, col: 0, msg: format!("live {}: line {} already answers GET {}", r.path, q.line, q.path) });
         }
     }
     for (i, r) in p.routes.iter().enumerate() {

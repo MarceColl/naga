@@ -4,6 +4,7 @@ mod analysis;
 mod claude;
 mod debug;
 mod gpu;
+mod help;
 mod ops;
 mod outline;
 mod state;
@@ -12,6 +13,7 @@ mod vim;
 mod view;
 
 use state::{Event, Key, State, update};
+use std::rc::Rc;
 use std::sync::Arc;
 use view::{Frame, view};
 use winit::application::ApplicationHandler;
@@ -68,6 +70,10 @@ impl App {
                 });
                 next.pending = store.migrate(&next.image.program).map(|m| m.pending).unwrap_or_default();
             }
+        }
+        // while the data view is open it shows the live tables as they are now
+        if let (Some(store), Some(_)) = (&mut self.store, &next.data) {
+            next.live_tables = store.snapshot(&next.image.program).ok().map(Rc::new);
         }
         if next.effect == Some(state::Effect::Quit) {
             self.quit = true;

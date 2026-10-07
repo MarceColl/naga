@@ -1,7 +1,7 @@
 //! The screen as data: what to draw, in which colours, and what each piece of text points at.
 //! colorForth-style: one screen of code on black, colour as meaning, one status line at the bottom.
 use crate::editor::analysis::{Analysis, Range, Step};
-use crate::editor::state::{Data, Edit, Mode, OPS, State, Tone};
+use crate::editor::state::{Data, Edit, Mode, OPS, Rows, State, Tone};
 use crate::ast::ColType;
 use crate::runs::Verdict;
 use crate::editor::debug::Debug;
@@ -40,8 +40,8 @@ pub enum Target {
     Step(usize),
     Def(Name, usize),
     Table(Name),
-    /// The data view's seed (`None`) or one of its runs.
-    Run(Option<usize>),
+    /// One of the data view's chips: live, seed, a run.
+    Rows(Rows),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -244,6 +244,9 @@ struct Marks {
 
 
 pub fn view(st: &State) -> Frame {
+    if let Some(at) = st.help {
+        return help_view(st, at);
+    }
     if let Some(d) = &st.data {
         return data_view(st, d);
     }
@@ -633,7 +636,7 @@ fn shape(an: &Analysis, t: &Target) -> Vec<Line> {
     let mut first = Line::default();
     let mut lines = vec![];
     match t {
-        Target::Run(_) => {}
+        Target::Rows(_) => {}
         Target::Table(name) => {
             first.push(&upper(name), Style::bold(TABLE, 800), None);
             first.push(" · CLICK TO SEE ITS ROWS", k, None);
@@ -717,10 +720,18 @@ fn data_view(st: &State, d: &Data) -> Frame {
     let an = &st.an;
     let mut f = Frame::default();
     let Some(t) = an.program.tables.get(&d.table) else { return f };
-    let run = d.run.and_then(|i| Some((i, an.runs.get(i)?, an.program.runs.get(i)?)));
+    let run = match d.rows {
+        Rows::Run(i) => an.runs.get(i).zip(an.program.runs.get(i)).map(|(o, r)| (i, o, r)),
+        _ => None,
+    };
     let seeded = an.seeded();
     let before = seeded.get(&t.name).cloned().unwrap_or_default();
-    let after = run.map_or_else(|| before.clone(), |(_, o, _)| o.end.get(&t.name).cloned().unwrap_or_default());
+    let live = st.live_tables.as_ref().and_then(|ts| ts.get(&t.name).cloned());
+    let after = match (d.rows, run) {
+        (Rows::Live, _) => live.clone().unwrap_or_default(),
+        (_, Some((_, o, _))) => o.end.get(&t.name).cloned().unwrap_or_default(),
+        _ => before.clone(),
+    };
     let id = |r: &Value| r.as_rec().and_then(|r| r.get("id")).map(Value::show).unwrap_or_default();
     let get = |r: &Value, k: &str| r.as_rec().and_then(|r| r.get(k)).cloned();
     let cols: Vec<(Name, ColType, bool)> = std::iter::once(("id".into(), ColType::Int, false)).chain(t.cols.iter().map(|c| (c.name.clone(), c.ty, c.opt))).collect();
@@ -744,9 +755,12 @@ fn data_view(st: &State, d: &Data) -> Frame {
     }
     head.push("  ", Style::plain(FAINT), None);
     let on = |yes: bool, fg: Color| Style { fg: if yes { FG } else { fg }, bg: yes.then_some(RULE), weight: 500, err: false };
-    head.push(" SEED ", on(d.run.is_none(), FAINT), Some(Target::Run(None)));
+    if st.live.is_some() {
+        head.push(" LIVE ", on(d.rows == Rows::Live, CALL), Some(Target::Rows(Rows::Live)));
+    }
+    head.push(" SEED ", on(d.rows == Rows::Seed, FAINT), Some(Target::Rows(Rows::Seed)));
     for (i, o) in an.runs.iter().enumerate() {
-        head.push(&format!(" {} ", i + 1), on(d.run == Some(i), verdict_color(o.verdict)), Some(Target::Run(Some(i))));
+        head.push(&format!(" {} ", i + 1), on(d.rows == Rows::Run(i), verdict_color(o.verdict)), Some(Target::Rows(Rows::Run(i))));
     }
     f.code.push(head);
     f.code.push(Line::default());
@@ -808,9 +822,14 @@ fn data_view(st: &State, d: &Data) -> Frame {
     first.push(&upper(&format!(" :: {{id: Int, {}}}", decl.join(", "))), Style::plain(DIM), None);
     let mut second = Line::default();
     second.push(&format!("{} ROWS ", after.len()), Style::plain(FG), None);
-    match run {
-        None => second.push("AS SEEDED", Style::plain(FG), None),
-        Some((i, o, r)) => {
+    let n = |m: char| rows.iter().filter(|r| r.1 == m).count();
+    match (d.rows, run) {
+        (Rows::Live, _) => {
+            second.push("LIVE, NOW", Style::plain(CALL), None);
+            second.push(&format!(" · +{} −{} ~{} SINCE THE SEED", n('+'), n('−'), n('~')), Style::plain(DIM), None);
+        }
+        (_, None) => second.push("AS SEEDED", Style::plain(FG), None),
+        (_, Some((i, o, r))) => {
             second.push(&upper(&format!("after run {} · {} · ", i + 1, r.name)), Style::plain(FG), None);
             let (what, c) = match o.verdict {
                 Verdict::Pass => ("passes".to_string(), CALL),
@@ -819,12 +838,44 @@ fn data_view(st: &State, d: &Data) -> Frame {
                 Verdict::Fail => ("answers something else".to_string(), ERR),
             };
             second.push(&upper(&what), Style::plain(c), None);
-            let n = |m: char| rows.iter().filter(|r| r.1 == m).count();
             second.push(&format!(" · +{} −{} ~{}", n('+'), n('−'), n('~')), Style::plain(DIM), None);
         }
     }
     f.shape = vec![first, second];
-    f.msg.push("← → SEED AND RUNS · ↑ ↓ TABLES · ESC BACK TO THE CODE", Style::plain(DIM), None);
+    f.msg.push("H L LIVE, SEED AND RUNS · J K TABLES · ESC BACK TO THE CODE", Style::plain(DIM), None);
+    stat(st, &mut f);
+    f
+}
+
+// ---------- the cheat sheet ----------
+fn help_view(st: &State, at: usize) -> Frame {
+    let mut f = Frame::default();
+    for l in crate::editor::help::TEXT.lines().skip(at) {
+        let mut line = Line::default();
+        if let Some(h) = l.strip_prefix("# ") {
+            line.push(&upper(h), Style::bold(DEF, 800), None);
+        } else if let Some(code) = l.strip_prefix("  ") {
+            // naga, coloured as the editor colours it, then its note in plain words
+            let (code, note) = code.split_once('\t').unwrap_or((code, ""));
+            let chars: Vec<char> = code.chars().collect();
+            let cls = classes(&chars);
+            line.push("  ", Style::plain(DIM), None);
+            for (c, k) in chars.iter().zip(&cls) {
+                line.push(&shown(*c, *k).to_string(), class_style(*k), None);
+            }
+            if !note.is_empty() {
+                line.push(&" ".repeat(32usize.saturating_sub(chars.len()).max(2)), Style::plain(DIM), None);
+                line.push(note, Style::plain(DIM), None);
+            }
+        } else {
+            line.push(l, Style::plain(FG), None);
+        }
+        f.code.push(line);
+    }
+    let mut first = Line::default();
+    first.push("NAGA, BRIEFLY", Style::bold(DEF, 800), None);
+    f.shape = vec![first];
+    f.msg.push("J K SCROLL · D U HALF A PAGE · G TOP · ESC BACK TO THE CODE", Style::plain(DIM), None);
     stat(st, &mut f);
     f
 }

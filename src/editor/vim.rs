@@ -243,6 +243,7 @@ fn normal(st: State, k: Key, shift: bool) -> State {
             _ => State { mode: Mode::Visual(st.cursor, rest == "V"), ..st },
         },
         "u" => undo(st),
+        "?" => State { help: Some(0), ..st },
         ":" => {
             let sel = match st.mode {
                 Mode::Visual(a, l) => Some((a, l)),

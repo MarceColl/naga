@@ -88,11 +88,21 @@ pub enum Event {
     Served(String),
 }
 
-/// A table's rows, as seeded (`run: None`) or after a run.
+/// Which rows the data view shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rows {
+    /// The live database's, now.
+    Live,
+    Seed,
+    /// After run n.
+    Run(usize),
+}
+
+/// A table's rows: live, as seeded, or after a run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Data {
     pub table: Name,
-    pub run: Option<usize>,
+    pub rows: Rows,
 }
 
 #[derive(Clone)]
@@ -117,12 +127,16 @@ pub struct State {
     pub redo: Vec<(String, Pos)>,
     pub data: Option<Data>,
     pub debug: Option<Debug>,
+    /// The cheat sheet, scrolled to this line.
+    pub help: Option<usize>,
     pub agent: Option<Agent>,
     /// A question for Claude, waiting to be sent: the agent's id and the prompt.
     pub ask: Option<(u64, String)>,
     pub agents: u64,
     /// The live server's port and the last request it answered.
     pub live: Option<(u16, Option<String>)>,
+    /// The live database's tables, as of the last look (kept fresh while the data view is open).
+    pub live_tables: Option<Rc<crate::runs::Tables>>,
     /// Table changes the live database can't take without losing data.
     pub pending: Vec<String>,
     /// Something only the app can do, waiting to be done.
@@ -138,7 +152,7 @@ pub struct State {
     pub row_lines: Rc<Vec<usize>>,
 }
 
-pub const OPS: [&str; 12] = ["extract name", "inline", "hole note", "rework", "drop", "swap", "rename name", "data", "debug 1–9", "reset table", "w", "q"];
+pub const OPS: [&str; 13] = ["extract name", "inline", "hole note", "rework", "drop", "swap", "rename name", "data", "debug 1–9", "reset table", "help", "w", "q"];
 
 impl State {
     pub fn new(text: &str) -> State {
@@ -158,11 +172,13 @@ impl State {
             redo: vec![],
             data: None,
             debug: None,
+            help: None,
             agent: None,
             ask: None,
             agents: 0,
             live: None,
             pending: vec![],
+            live_tables: None,
             effect: None,
             hover: None,
             drag: None,
@@ -264,6 +280,26 @@ pub fn update(st: State, ev: Event) -> State {
         Event::Served(line) => State { live: st.live.map(|(port, _)| (port, Some(line))), ..st },
         Event::Viewport(rows, lines) => State { rows, row_lines: Rc::new(lines), ..st },
         Event::Scroll(dy) => State { scroll: (st.scroll + dy).clamp(0.0, st.row_lines.len() as f32), ..st },
+        Event::Key(k, _) if st.help.is_some() => {
+            let at = st.help.unwrap_or(0);
+            let last = crate::editor::help::TEXT.lines().count().saturating_sub(st.rows.max(1) / 2);
+            let page = st.rows.max(2) / 2;
+            let at = match k {
+                Key::Escape | Key::Char('q') | Key::Char('?') => return State { help: None, ..st },
+                Key::Down | Key::Char('j') | Key::Enter => at + 1,
+                Key::Up | Key::Char('k') => at.saturating_sub(1),
+                Key::Char('d') | Key::Char(' ') => at + page,
+                Key::Char('u') => at.saturating_sub(page),
+                Key::Char('g') | Key::Home => 0,
+                Key::Char('G') => last,
+                _ => at,
+            };
+            State { help: Some(at.min(last)), ..st }
+        }
+        ev if st.help.is_some() => match ev {
+            Event::Press(..) => State { help: None, ..st },
+            _ => st,
+        },
         ev if st.debug.is_some() => {
             let d = st.debug.clone().unwrap();
             debugging(st, d, ev)
@@ -282,8 +318,9 @@ pub fn open_data(st: State, table: &str) -> State {
     if !st.an.program.tables.contains_key(table) {
         return st.say(format!("there's no table called {table}"), Tone::No);
     }
-    let run = st.data.as_ref().and_then(|d| d.run);
-    State { data: Some(Data { table: table.into(), run }), hover: None, ..st }
+    let first = if st.live.is_some() { Rows::Live } else { Rows::Seed };
+    let rows = st.data.as_ref().map_or(first, |d| d.rows);
+    State { data: Some(Data { table: table.into(), rows }), hover: None, ..st }
 }
 
 fn data(st: State, d: Data, ev: Event) -> State {
@@ -298,14 +335,17 @@ fn data(st: State, d: Data, ev: Event) -> State {
         Event::Key(Key::Char('q'), _) => Key::Escape,
         Event::Key(k, _) => k,
         Event::Press(Some(Target::Table(t)), ..) => return State { data: Some(Data { table: t, ..d }), ..st },
-        Event::Press(Some(Target::Run(r)), ..) => return State { data: Some(Data { run: r, ..d }), ..st },
+        Event::Press(Some(Target::Rows(r)), ..) => return State { data: Some(Data { rows: r, ..d }), ..st },
         Event::Hover(t, ..) => return State { hover: t, ..st },
         _ => return st,
     };
+    // the choices, left to right: live (when serving), seed, then each run
+    let choices: Vec<Rows> = st.live.iter().map(|_| Rows::Live).chain([Rows::Seed]).chain((0..runs).map(Rows::Run)).collect();
+    let i = choices.iter().position(|r| *r == d.rows).unwrap_or(0);
     let d = match k {
         Key::Escape => return State { data: None, ..st },
-        Key::Right => Data { run: Some(d.run.map_or(0, |r| r + 1).min(runs.saturating_sub(1))).filter(|_| runs > 0), ..d },
-        Key::Left => Data { run: d.run.and_then(|r| r.checked_sub(1)), ..d },
+        Key::Right => Data { rows: choices[(i + 1).min(choices.len() - 1)], ..d },
+        Key::Left => Data { rows: choices[i.saturating_sub(1)], ..d },
         Key::Down => Data { table: tables[(at + 1) % tables.len()].clone(), ..d },
         Key::Up => Data { table: tables[(at + tables.len() - 1) % tables.len()].clone(), ..d },
         _ => d,
@@ -460,6 +500,7 @@ pub fn run(st: State, raw: &str) -> State {
     }
     let need = |what: &str| format!("put the cursor on {what}, or select some");
     match op.as_str() {
+        "help" | "h" => State { help: Some(0), ..st },
         "w" | "write" => st.say(format!("saved · {}", status(&an)), Tone::Ok),
         "q" | "quit" => State { effect: Some(Effect::Quit), ..st },
         "extract" | "factor" => match &ids {
@@ -571,11 +612,34 @@ pub mod tests {
     fn the_data_view_walks_tables_and_runs() {
         let src = "table ts :: {n: Num}\ntable us :: {n: Num}\nroute GET /x = w\nw = +{status: 200, json: 1}\nrun \"a\"\n  GET /x → 200\nrun \"b\"\n  GET /x → 200\n";
         let st = keys(State::new(src), ":data<cr>");
-        assert_eq!(st.data, Some(Data { table: "ts".into(), run: None }));
+        assert_eq!(st.data, Some(Data { table: "ts".into(), rows: Rows::Seed }));
         let st = keys(st, "lllj");
-        assert_eq!(st.data, Some(Data { table: "us".into(), run: Some(1) }));
+        assert_eq!(st.data, Some(Data { table: "us".into(), rows: Rows::Run(1) }));
         let st = keys(st, "hh<esc>");
         assert_eq!(st.data, None);
+    }
+
+    #[test]
+    fn the_data_view_shows_the_live_rows_marked_against_the_seed() {
+        use crate::value::Value;
+        let src = "table ts :: {n: Num}\nseed ts = [{n: 1}]\n";
+        let row = |id: f64, n: f64| Value::Rec(Rc::new([("id".into(), Value::Num(id)), ("n".into(), Value::Num(n))].into_iter().collect()));
+        let live: crate::runs::Tables = [("ts".into(), vec![row(1.0, 5.0), row(2.0, 7.0)])].into_iter().collect();
+        let st = State { live: Some((4170, None)), live_tables: Some(Rc::new(live)), ..State::new(src) };
+        let st = keys(st, ":data<cr>");
+        assert_eq!(st.data, Some(Data { table: "ts".into(), rows: Rows::Live }));
+        let f = crate::editor::view::view(&st);
+        let text: Vec<String> = f.code.iter().map(|l| l.spans.iter().map(|s| s.text.as_str()).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")).collect();
+        assert!(text.contains(&"~ 1 5".to_string()) && text.contains(&"+ 2 7".to_string()), "{text:?}");
+        assert_eq!(keys(st, "l").data.map(|d| d.rows), Some(Rows::Seed));
+    }
+
+    #[test]
+    fn the_cheat_sheet_opens_scrolls_and_closes() {
+        let st = keys(State::new(SRC), "?jjj");
+        assert_eq!(st.help, Some(3));
+        assert_eq!(keys(st, "<esc>").help, None);
+        assert_eq!(keys(State::new(SRC), ":help<cr>").help, Some(0));
     }
 
     #[test]

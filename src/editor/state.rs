@@ -315,6 +315,9 @@ pub fn update(st: State, ev: Event) -> State {
 // ---------- the data view ----------
 /// Opens the data view on `table`, keeping the run it showed last.
 pub fn open_data(st: State, table: &str) -> State {
+    // names ignore case: `houseS` in the text is the table houses
+    let table = table.to_lowercase();
+    let table = table.as_str();
     if !st.an.program.tables.contains_key(table) {
         return st.say(format!("there's no table called {table}"), Tone::No);
     }
@@ -659,6 +662,15 @@ pub mod tests {
         let st = keys(st, "3G:fix<cr>");
         assert!(st.an.text.ends_with("complete {-missing} = ? when notes.get finds no row\ncomplete = -{note}\n"), "{}", st.an.text);
         assert!(st.an.errors.iter().all(|e| e.detail.is_none()), "the branch is handled now");
+    }
+
+    #[test]
+    fn a_table_opens_whatever_the_case_it_is_written_in() {
+        let st = State::new("table houseS :: {price: Int}\n");
+        let st = update(st, Event::Press(Some(Target::Table("houseS".into())), None, false));
+        assert_eq!(st.data.map(|d| d.table), Some("houses".into()));
+        let st = keys(State::new("table houseS :: {price: Int}\n"), ":data HOUSES<cr>");
+        assert_eq!(st.data.map(|d| d.table), Some("houses".into()));
     }
 
     #[test]

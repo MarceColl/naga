@@ -6,8 +6,8 @@ mod apply;
 mod expr;
 mod sig;
 mod stmt;
-mod ty;
-mod world;
+pub(crate) mod ty;
+pub(crate) mod world;
 
 use crate::ast::{FieldDecl, FieldTy, Pos, Program, StmtKind, walk};
 use crate::value::Name;

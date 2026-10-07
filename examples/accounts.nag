@@ -1,0 +1,23 @@
+-- Sign up and log in: passwords are stored as Argon2id hashes, never as they were typed.
+-- Runs use a fixed clock (`at`) and seed, so time() and the hashes repeat; requests get
+-- the real clock.
+
+table users :: {email: Text, hash: Text, joined: Text}
+
+route POST /signup {email: Text, pw: Text} = signup
+route POST /login  {email: Text, pw: Text} = login
+
+signup = +{user: {email: lower(body.email), hash: password(body.pw), joined: time()}}
+         users.insert
+         +{status: 201, json: {id: user.id, joined: user.joined}}
+
+login = users.where when email == lower(^body.email) logged-in
+
+logged-in {users} when len(users) > 0 and verify(body.pw, head(users).hash) =
+  +{status: 200, json: {welcome: head(users).email, token: sha256("{head(users).id}:{time()}")}}
+logged-in = +{status: 401, json: "wrong email or password"}
+
+run "signs up and logs in" at "2026-10-07T12:00:00Z"
+  POST /signup {email: "Ana@x.com", pw: "hunter2"} → 201 {id: 1, joined: "2026-10-07T12:00:00Z"}
+  POST /login {email: "ana@x.com", pw: "hunter2"} → 200
+  POST /login {email: "ana@x.com", pw: "hunter3"} → 401

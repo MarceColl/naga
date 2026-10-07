@@ -2,7 +2,7 @@
 use super::Cx;
 use super::ty::*;
 use super::world::*;
-use crate::ast::{BinOp, Builtin, Expr, Part};
+use crate::ast::{BinOp, Expr, Part};
 use crate::value::Name;
 use indexmap::{IndexMap, IndexSet};
 use std::rc::Rc;
@@ -62,13 +62,12 @@ impl Cx<'_> {
                 Ty::Bool
             }
             Expr::Call(f, args) => {
-                use Builtin::*;
-                let list_arg = matches!(f, Sum | Head | Last | Tail | Reverse | Push) || (matches!(f, Min | Max) && args.len() == 1);
+                let list_arg = f.listy && !(matches!(f.name, "min" | "max") && args.len() > 1);
                 let mut ts = vec![];
                 for (i, a) in args.iter().enumerate() {
                     ts.push(if i == 0 && list_arg { self.ty_of_listy(w, a, s)? } else { self.ty_of(w, a, s)? });
                 }
-                fn_t(w, *f, &ts)?
+                (f.ty)(w, &ts)?
             }
             Expr::Bin(op, a, b) => {
                 let (a, b) = (self.ty_of(w, a, s)?, self.ty_of(w, b, s)?);
@@ -158,64 +157,6 @@ fn bin_t(w: &mut World, op: BinOp, a: &Ty, b: &Ty) -> R<Ty> {
             constrain(w, a, &Ty::Num, op.glyph())?;
             constrain(w, b, &Ty::Num, op.glyph())?;
             Ty::Num
-        }
-    })
-}
-
-fn fn_t(w: &mut World, f: Builtin, args: &[Ty]) -> R<Ty> {
-    use Builtin::*;
-    let a0 = args.first().cloned().unwrap_or(Ty::Any);
-    let what = format!("{}()", f.name());
-    let num = |w: &mut World, t: &Ty| constrain(w, t, &Ty::Num, &what).map(|_| ());
-    Ok(match f {
-        Len => {
-            let r = rt(w, &a0);
-            if !["list", "text", "rec", "any"].contains(&r.tag()) {
-                return terr(format!("len() needs a list, text or record, got {}", fmt_t(Some(w), &r, 0)));
-            }
-            Ty::Num
-        }
-        Sum => {
-            let el = as_list(w, &a0, "sum()")?;
-            num(w, &el)?;
-            Ty::Num
-        }
-        Min | Max => {
-            if args.len() == 1 {
-                let el = as_list(w, &a0, &what)?;
-                num(w, &el)?;
-            } else {
-                for a in args {
-                    num(w, a)?;
-                }
-            }
-            Ty::Num
-        }
-        Abs | Floor | Ceil | Round => {
-            for a in args {
-                num(w, a)?;
-            }
-            Ty::Num
-        }
-        Head | Last => as_list(w, &a0, &what)?,
-        Tail | Reverse => {
-            as_list(w, &a0, &what)?;
-            a0
-        }
-        Push => {
-            let el = as_list(w, &a0, "push()")?;
-            list(join(&el, args.get(1).unwrap_or(&Ty::Any)))
-        }
-        Range => {
-            for a in args {
-                num(w, a)?;
-            }
-            list(Ty::Num)
-        }
-        Str => Ty::Text,
-        Keys => {
-            as_rec(w, &a0, "keys()")?;
-            list(Ty::Const(None))
         }
     })
 }

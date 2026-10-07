@@ -7,6 +7,8 @@ use std::sync::Arc;
 pub struct Env<'a> {
     pub subj: &'a Rec,
     pub now: f64,
+    /// The clock and randomness effectful functions read.
+    pub ctx: &'a crate::funcs::Ctx,
     /// Enclosing records, innermost first.
     pub outer: &'a [Arc<Rec>],
 }
@@ -16,73 +18,6 @@ fn number(v: &Value, what: &str) -> Result<f64, RunError> {
         Value::Num(n) => Ok(*n),
         v => fail(format!("{what} needs a number, got {}", v.described())),
     }
-}
-
-fn items<'a>(v: &'a Value, what: &str) -> Result<&'a Arc<Vec<Value>>, RunError> {
-    match v {
-        Value::List(xs) => Ok(xs),
-        v => fail(format!("{what} needs a list, got {}", v.described())),
-    }
-}
-
-fn builtin(f: Builtin, a: Vec<Value>) -> Result<Value, RunError> {
-    use Builtin::*;
-    let arg = |i: usize| a.get(i).cloned().unwrap_or(Value::Nil);
-    let a0 = arg(0);
-    Ok(match f {
-        Len => Value::Num(match &a0 {
-            Value::List(xs) => xs.len(),
-            Value::Text(s) => num::len16(s),
-            Value::Rec(r) => r.len(),
-            v => return fail(format!("len() needs a list, string or record, got {}", v.type_name())),
-        } as f64),
-        Sum => Value::Num(items(&a0, "sum()")?.iter().try_fold(0.0, |s, x| Ok::<_, RunError>(s + number(x, "sum()")?))?),
-        Min | Max => {
-            let what = if f == Min { "min()" } else { "max()" };
-            let xs: Vec<Value> = match (&a[..], &a0) {
-                ([_], Value::List(xs)) => xs.to_vec(),
-                _ => a.clone(),
-            };
-            if xs.is_empty() {
-                return fail(format!("{} of nothing", what));
-            }
-            let ns = xs.iter().map(|x| number(x, what)).collect::<Result<Vec<_>, _>>()?;
-            Value::Num(ns.into_iter().reduce(|p, q| if p.is_nan() || q.is_nan() { f64::NAN } else if f == Min { p.min(q) } else { p.max(q) }).unwrap())
-        }
-        Abs => Value::Num(number(&a0, "abs()")?.abs()),
-        Round => {
-            let d = if a.len() > 1 { number(&arg(1), "round()")? } else { 0.0 };
-            let p = 10f64.powf(d);
-            Value::Num(num::round(number(&a0, "round()")? * p) / p)
-        }
-        Floor => Value::Num(number(&a0, "floor()")?.floor()),
-        Ceil => Value::Num(number(&a0, "ceil()")?.ceil()),
-        Head => items(&a0, "head()")?.first().cloned().map_or_else(|| fail("head() of an empty list"), Ok)?,
-        Tail => list(items(&a0, "tail()")?.iter().skip(1).cloned().collect()),
-        Last => items(&a0, "last()")?.last().cloned().map_or_else(|| fail("last() of an empty list"), Ok)?,
-        Push => {
-            let mut xs = items(&a0, "push()")?.to_vec();
-            xs.push(arg(1));
-            list(xs)
-        }
-        Reverse => list(items(&a0, "reverse()")?.iter().rev().cloned().collect()),
-        Range => {
-            let (lo, hi) = if a.len() < 2 { (Value::Num(0.0), a0) } else { (a0, arg(1)) };
-            let (lo, hi) = (number(&lo, "range()")?, number(&hi, "range()")?);
-            let mut r = vec![];
-            let mut i = lo;
-            while i < hi && r.len() < 100000 {
-                r.push(Value::Num(i));
-                i += 1.0;
-            }
-            list(r)
-        }
-        Str => Value::Text(a0.text().into()),
-        Keys => match &a0 {
-            Value::Rec(r) => list(r.keys().map(|k| Value::Const(k.clone())).collect()),
-            v => return fail(format!("keys() needs a record, got {}", v.type_name())),
-        },
-    })
 }
 
 pub fn get_key(o: &Value, key: &str) -> Result<Value, RunError> {
@@ -128,7 +63,7 @@ pub fn eval(e: &Expr, env: &Env) -> Result<Value, RunError> {
         Expr::Not(a) => Value::Bool(!eval(a, env)?.truthy()),
         Expr::And(a, b) => Value::Bool(eval(a, env)?.truthy() && eval(b, env)?.truthy()),
         Expr::Or(a, b) => Value::Bool(eval(a, env)?.truthy() || eval(b, env)?.truthy()),
-        Expr::Call(f, args) => builtin(*f, args.iter().map(|a| eval(a, env)).collect::<Result<_, _>>()?)?,
+        Expr::Call(f, args) => (f.run)(&args.iter().map(|a| eval(a, env)).collect::<Result<Vec<_>, _>>()?, env.ctx)?,
         Expr::Bin(op, a, b) => binary(*op, eval(a, env)?, eval(b, env)?)?,
     })
 }

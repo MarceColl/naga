@@ -69,7 +69,7 @@ pub fn eval(text: &str, line: &str, rec: Arc<Rec>, store: &mut Store) -> (Entry,
     if let Some(e) = p.errors.iter().find(|e| e.line >= at) {
         return (entry(Err(e.msg.clone()), vec![], None), false);
     }
-    let ran = run_word(&p, store, &WORD.into(), (*rec).clone());
+    let ran = run_word(&p, store, &WORD.into(), (*rec).clone(), crate::funcs::Clock::now());
     let wrote = ran.sql.iter().any(|q| ["INSERT", "UPDATE", "DELETE"].iter().any(|w| q.starts_with(w)));
     let e = match ran.out {
         Ok(out) if expr => entry(Ok(rec), ran.said, out.get(VALUE).cloned()),

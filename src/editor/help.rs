@@ -1,7 +1,13 @@
 //! The cheat sheet `?` opens. `# ` lines are headings, lines indented two spaces are naga
-//! (coloured like code), with an optional note after a tab; the rest is prose.
+//! (coloured like code), with an optional note after a tab; the rest is prose. The functions
+//! are listed from the registry, so the sheet knows every one.
 
-pub const TEXT: &str = r#"# The idea
+pub static TEXT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let funcs: Vec<String> = crate::funcs::FUNCS.iter().map(|f| format!("  {}\t{}", f.sig, f.note)).collect();
+    SHEET.replace("{functions}\n", &(funcs.join("\n") + "\n"))
+});
+
+const SHEET: &str = r#"# The idea
 A record flows through words. Each word takes the record and gives one back; words written
 one after another run left to right. Names ignore case: GET-NOTE is get-note.
   main = +{n: 3} countdown
@@ -54,8 +60,12 @@ Patterns look at the record:
   a <: b	a is within b (⊑)
   a // b	a with b's fields over it (⫽)
   :asset	a constant: a name used as a value (any case: :Asset is :asset)
-Functions: len sum min max abs round floor ceil head tail last push reverse range str keys
 
+# Functions
+Called inside expressions. time(), unix(), uuid(), random() and password()'s salt use a
+fixed clock and seed in runs (set the time with run "x" at "…"), the real ones everywhere
+else. `now` is the step count, not the time.
+{functions}
 # Tables
   table accounts :: {name: Text, kind: Const, memo: Text?}
   seed accounts = [{name: "Cash", kind: :asset}]

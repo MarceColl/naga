@@ -4,17 +4,25 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+argon2 = "0.6.0"
 axum = { version = "0.8", features = ["ws"] }
+base64 = "0.23.1"
+getrandom = "0.4.3"
 glyphon = "0.12"
+hmac = "0.13.0"
 indexmap = "2.14.2"
+md-5 = "0.11.0"
 png = "0.18"
 pollster = "0.4"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 ryu-js = "1.0.3"
 serde_json = "1"
+sha1 = "0.11.0"
+sha2 = "0.11.0"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros"] }
 unicode-general-category = "1.1.0"
 ureq = { version = "3", features = ["json"] }
+uuid = { version = "1.27.0", default-features = false }
 wgpu = "30"
 winit = "0.30"
 

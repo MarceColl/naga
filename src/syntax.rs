@@ -347,7 +347,7 @@ fn nud(ts: &mut Ts) -> R<Expr> {
                 return ts.err(format!("“{v}” can't be used inside an expression"), Some(&tok));
             }
             if ts.is_op("(", 0) {
-                let Some(f) = Builtin::named(v) else { return ts.err(format!("there's no function called {v}()"), Some(&tok)) };
+                let Some(f) = crate::funcs::named(v) else { return ts.err(format!("there's no function called {v}() — the functions are in the cheat sheet, under Expressions"), Some(&tok)) };
                 ts.next();
                 let mut args = vec![];
                 while !ts.is_op(")", 0) {
@@ -362,6 +362,12 @@ fn nud(ts: &mut Ts) -> R<Expr> {
                     }
                 }
                 ts.next();
+                let (lo, hi) = f.args;
+                if !(lo..=hi).contains(&args.len()) {
+                    let n = |k: usize| if k == 1 { "1 argument".to_string() } else { format!("{k} arguments") };
+                    let takes = if lo == hi { n(lo) } else if hi > 9 { format!("at least {}", n(lo)) } else { format!("{lo} or {}", n(hi)) };
+                    return ts.err(format!("{v}() takes {takes}: {}", f.sig), Some(&tok));
+                }
                 return postfix(ts, Expr::Call(f, args));
             }
             postfix(ts, Expr::Field(v.clone()))
@@ -787,7 +793,7 @@ fn def(ts: &mut Ts) -> R<(Name, Clause)> {
     let name_tok = ts.next();
     let Some(name) = id_of(&name_tok).cloned() else { return ts.err("a definition starts with a word name, like greet = …", name_tok.as_ref()) };
     let name_tok = name_tok.unwrap();
-    if is_keyword(&name) || Builtin::named(&name).is_some() {
+    if is_keyword(&name) {
         return ts.err(format!("{name} is a built-in name"), Some(&name_tok));
     }
     let (mut pat, mut guard, mut guard_src) = (None, None, None);
@@ -1024,6 +1030,18 @@ fn run(lines: &[String], ch: &[usize]) -> R<Run> {
     ts.next();
     let n = ts.next();
     let Some(Token { t: Tk::Str(name), .. }) = n.clone() else { return ts.err("a run starts with its name in quotes: run \"…\"", n.as_ref()) };
+    let mut at = None;
+    if ts.is_id("at") {
+        ts.next();
+        let t = ts.next();
+        at = match &t {
+            Some(Token { t: Tk::Str(s), .. }) => crate::funcs::parse_iso(s),
+            _ => None,
+        };
+        if at.is_none() {
+            return ts.err("a run's time is like  run \"name\" at \"2026-10-07T12:00:00Z\"", t.as_ref());
+        }
+    }
     if let Some(t) = ts.peek(0) {
         return ts.err(format!("unexpected “{}”: requests go on the lines below, like  GET /accounts/1 → 200", t.raw), None);
     }
@@ -1039,7 +1057,7 @@ fn run(lines: &[String], ch: &[usize]) -> R<Run> {
         return serr(format!("run \"{name}\" has no requests: add lines like  GET /accounts/1 → 200"), Some((line, 0)));
     }
     let requests = groups.iter().map(|g| request(lines, g)).collect::<R<Vec<_>>>()?;
-    Ok(Run { name, requests, line })
+    Ok(Run { name, at, requests, line })
 }
 
 /// `VERB /path?query [body] → status [json]`; the path is raw text, as in a route.

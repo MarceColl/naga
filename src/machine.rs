@@ -254,6 +254,8 @@ pub struct Runtime<'a> {
     pub log: &'a mut Vec<String>,
     pub store: Option<&'a mut Store>,
     pub store_error: Option<&'a str>,
+    /// What effectful functions read: the real clock for requests, a fixed one for runs.
+    pub clock: crate::funcs::Clock,
 }
 
 pub fn initial(p: &Program, entry: &Name, subj: Arc<Rec>) -> State {
@@ -299,7 +301,8 @@ pub fn step(p: &Program, s: &State, rt: &mut Runtime) -> State {
 
 fn exec(p: &Program, s: &State, stmt: &Stmt, mut k: Vec<Frame>, lvl: usize, rt: &mut Runtime) -> Result<(Vec<Frame>, Arc<Rec>, bool), RunError> {
     let outer = outer_chain(&s.k);
-    let env = Env { subj: &s.subj, now: s.tick as f64, outer: &outer };
+    let ctx = crate::funcs::Ctx::new(rt.clock, s.tick);
+    let env = Env { subj: &s.subj, now: s.tick as f64, outer: &outer, ctx: &ctx };
     let mut subj = s.subj.clone();
     let mut brk = false;
     let need = |subj: &Rec, n: &Name| if subj.contains_key(n) { Ok(()) } else { fail(format!("needs field {n}")) };
@@ -568,7 +571,7 @@ impl<'p> Session<'p> {
         if self.state().status != Status::Ready {
             return self.state();
         }
-        let mut rt = Runtime { log: &mut self.log, store: self.store.as_mut(), store_error: self.store_error.as_deref() };
+        let mut rt = Runtime { log: &mut self.log, store: self.store.as_mut(), store_error: self.store_error.as_deref(), clock: Default::default() };
         let n = step(self.p, &self.hist[self.cur], &mut rt);
         self.hist.push(n);
         self.cur += 1;

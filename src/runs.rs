@@ -2,6 +2,7 @@
 //! through the same path `naga serve` takes.
 use crate::ast::*;
 use crate::eval::{Env, eval};
+use crate::funcs::Clock;
 use crate::machine::Status;
 use crate::serve::{Req, error, reply, request, run_word};
 use crate::store::Store;
@@ -55,7 +56,7 @@ impl Outcome {
 }
 
 fn literal(e: &Expr) -> Result<Value, String> {
-    eval(e, &Env { subj: &Rec::new(), now: 0.0, outer: &[] }).map_err(|e| e.msg)
+    eval(e, &Env { subj: &Rec::new(), now: 0.0, outer: &[], ctx: &Default::default() }).map_err(|e| e.msg)
 }
 
 /// The message of an `{"error": …}` answer.
@@ -71,20 +72,25 @@ fn wire(v: &Value) -> Value {
     from_json(&to_plain_json(v)).unwrap_or(Value::Nil)
 }
 
+/// A run's clock: its own time, or the start of 2026; step `i` draws its own randomness.
+pub fn clock(r: &Run, i: usize) -> Clock {
+    Clock::fixed(r.at.unwrap_or(crate::funcs::RUN_START)).step(i)
+}
+
 /// Where a step of a run starts: the word it runs and the record it runs on. A request is
 /// read as `naga serve` reads it; `LIVE` mounts a page on its params; `EVENT` runs the page
 /// on the state its last step left (`page`), with the event.
-pub fn start(p: &Program, q: &Request, page: Option<&(Name, Rec)>) -> Result<(Name, Result<Rec, String>), String> {
+pub fn start(p: &Program, q: &Request, page: Option<&(Name, Rec)>, clock: Clock) -> Result<(Name, Result<Rec, String>), String> {
     let job = |routes: &[Route], (i, path, query): (usize, Pairs, Pairs), body: String| {
         let r = &routes[i];
-        (r.word.clone(), request(r, &Req { route: i, path, query, body }))
+        (r.word.clone(), request(r, &Req { route: i, path, query, body }, clock))
     };
     match &*q.verb {
         "LIVE" => Ok(job(&p.lives, p.live_for(&q.path).ok_or(format!("LIVE {} matches no live page", q.path))?, String::new())),
         "EVENT" => {
             let (word, state) = page.ok_or("an EVENT goes to the page mounted before it: start with LIVE /path")?;
             let mut subj = state.clone();
-            subj.insert("time".into(), Value::Text(crate::serve::now_utc().into()));
+            subj.insert("time".into(), Value::Text(crate::funcs::iso(clock.at).into()));
             subj.insert("event".into(), q.body.as_ref().map(literal).transpose()?.unwrap_or(Value::Nil));
             Ok((word.clone(), Ok(subj)))
         }
@@ -112,8 +118,9 @@ pub fn run(p: &Program, r: &Run) -> Outcome {
     let mut out = Outcome { seed: store.snapshot(p).unwrap_or_default(), ..out };
     store.log.clear();
     let mut page: Option<(Name, Rec)> = None;
-    for q in &r.requests {
-        let (word, subj) = match start(p, q, page.as_ref()) {
+    for (i, q) in r.requests.iter().enumerate() {
+        let clock = clock(r, i);
+        let (word, subj) = match start(p, q, page.as_ref(), clock) {
             Ok(x) => x,
             Err(e) => {
                 out = out.stop(Verdict::Error, e);
@@ -127,7 +134,7 @@ pub fn run(p: &Program, r: &Run) -> Outcome {
                 break;
             }
         };
-        let ran = subj.map(|subj| run_word(p, &mut store, &word, subj));
+        let ran = subj.map(|subj| run_word(p, &mut store, &word, subj, clock));
         if let Ok(ran) = &ran {
             out.sql.extend(ran.sql.iter().cloned());
             if ran.stop == Status::Hole {

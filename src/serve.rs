@@ -186,11 +186,12 @@ pub fn error(msg: &str) -> String {
 /// Decodes the request, runs its route's word on `store` and encodes the reply.
 pub fn handle(p: &Program, store: &mut Store, req: &Req) -> Handled {
     let r = &p.routes[req.route];
-    let subj = match request(r, req) {
+    let clock = crate::funcs::Clock::now();
+    let subj = match request(r, req, clock) {
         Ok(s) => s,
         Err(msg) => return Handled { status: 400, json: error(&msg), stop: Status::Done, said: vec![], sql: vec![] },
     };
-    let ran = run_word(p, store, &r.word, subj);
+    let ran = run_word(p, store, &r.word, subj, clock);
     let (status, json) = ran.out.and_then(|subj| reply(&subj)).unwrap_or_else(|msg| (500, error(&msg)));
     Handled { status, json, stop: ran.stop, said: ran.said, sql: ran.sql }
 }
@@ -205,10 +206,10 @@ pub struct Ran {
 }
 
 /// Runs `word` on `subj` against `store`, within the step budget.
-pub fn run_word(p: &Program, store: &mut Store, word: &Name, subj: Rec) -> Ran {
+pub fn run_word(p: &Program, store: &mut Store, word: &Name, subj: Rec, clock: crate::funcs::Clock) -> Ran {
     let mut log = vec![];
     let mut s = initial(p, word, Arc::new(subj));
-    let mut rt = Runtime { log: &mut log, store: Some(store), store_error: None };
+    let mut rt = Runtime { log: &mut log, store: Some(store), store_error: None, clock };
     for _ in 0..BUDGET {
         if s.status != Status::Ready {
             break;
@@ -226,7 +227,7 @@ pub fn run_word(p: &Program, store: &mut Store, word: &Name, subj: Rec) -> Ran {
 }
 
 /// Path params and query fields at the top level, the body in `body`, the time in `time`.
-pub fn request(r: &Route, job: &Req) -> Result<Rec, String> {
+pub fn request(r: &Route, job: &Req, clock: crate::funcs::Clock) -> Result<Rec, String> {
     let raw = |pairs: &Pairs, d: &FieldDecl| pairs.iter().find(|(k, _)| k.eq_ignore_ascii_case(&d.name)).map(|(_, v)| (d.name.clone(), text(d, v)));
     let given: Rec = r.path_params().filter_map(|d| raw(&job.path, d)).chain(r.query.iter().filter_map(|d| raw(&job.query, d))).collect();
     let mut rec = record(r.params(), &given, "")?;
@@ -234,7 +235,7 @@ pub fn request(r: &Route, job: &Req) -> Result<Rec, String> {
         let Some(Value::Rec(given)) = from_json(&job.body) else { return Err("the body must be a JSON object".into()) };
         rec.insert("body".into(), Value::Rec(Arc::new(record(decls, &given, "")?)));
     }
-    rec.insert("time".into(), Value::Text(now_utc().into()));
+    rec.insert("time".into(), Value::Text(crate::funcs::iso(clock.at).into()));
     Ok(rec)
 }
 
@@ -289,17 +290,7 @@ pub fn reply(subj: &Rec) -> Result<(u16, String), String> {
 
 /// `2026-10-06T21:03:00Z`, from days since the epoch to a civil date (Hinnant's algorithm).
 pub fn now_utc() -> String {
-    let s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
-    let (days, secs) = (s.div_euclid(86400), s.rem_euclid(86400));
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let (d, m) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", secs / 3600, secs / 60 % 60, secs % 60)
+    crate::funcs::iso(crate::funcs::Clock::now().at)
 }
 
 // The program, its values and a run's state cross threads: requests run in parallel on them.

@@ -25,26 +25,6 @@ impl BinOp {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Builtin {
-    Len, Sum, Min, Max, Abs, Round, Floor, Ceil, Head, Tail, Last, Push, Reverse, Range, Str, Keys,
-}
-
-impl Builtin {
-    pub const ALL: [(&'static str, Builtin); 16] = [
-        ("len", Builtin::Len), ("sum", Builtin::Sum), ("min", Builtin::Min), ("max", Builtin::Max),
-        ("abs", Builtin::Abs), ("round", Builtin::Round), ("floor", Builtin::Floor), ("ceil", Builtin::Ceil),
-        ("head", Builtin::Head), ("tail", Builtin::Tail), ("last", Builtin::Last), ("push", Builtin::Push),
-        ("reverse", Builtin::Reverse), ("range", Builtin::Range), ("str", Builtin::Str), ("keys", Builtin::Keys),
-    ];
-    pub fn named(n: &str) -> Option<Builtin> {
-        Self::ALL.iter().find(|(k, _)| *k == n).map(|(_, b)| *b)
-    }
-    pub fn name(self) -> &'static str {
-        Self::ALL.iter().find(|(_, b)| *b == self).unwrap().0
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum Part {
     Text(String),
@@ -67,7 +47,7 @@ pub enum Expr {
     Not(Box<Expr>),
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
-    Call(Builtin, Vec<Expr>),
+    Call(&'static crate::funcs::Func, Vec<Expr>),
     Bin(BinOp, Box<Expr>, Box<Expr>),
 }
 
@@ -391,6 +371,8 @@ pub struct Request {
 #[derive(Clone, Debug)]
 pub struct Run {
     pub name: String,
+    /// The time its clock starts at: `run "x" at "2026-10-07T12:00:00Z"`.
+    pub at: Option<f64>,
     pub requests: Vec<Request>,
     pub line: usize,
 }

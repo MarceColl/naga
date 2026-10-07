@@ -98,3 +98,18 @@ fn a_word_that_calls_itself_first_stops_quickly() {
     assert_eq!(o.detail.as_deref(), Some("down is 2000 calls deep: does it change something before calling itself again? (line 3)"));
     assert!(t.elapsed().as_millis() < 500, "{:?}", t.elapsed());
 }
+
+#[test]
+fn functions_with_effects_repeat_in_runs_and_are_checked() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/accounts.nag")).unwrap();
+    let p = parse(&src);
+    let (a, b) = (run(&p, &p.runs[0]), run(&p, &p.runs[0]));
+    assert_eq!(a.verdict, Verdict::Pass, "{:?} {:?}", a.said, a.detail);
+    assert_eq!(a.said, b.said, "the same run answers the same: a fixed clock and seed");
+    let hash = a.end["users"][0].as_rec().unwrap()["hash"].text();
+    assert!(hash.starts_with("$argon2id$"), "{hash}");
+    // arity at parse time, types in the checker
+    assert_eq!(parse("w = +{h: sha256()}\n").errors[0].msg, "sha256() takes 1 argument: sha256(x) → Text");
+    let checked = naga::check::Checker::default().check(&parse("w = +{t: unix(5)}\n"), None);
+    assert!(checked.errors.iter().any(|e| e.msg.contains("unix()")), "{:?}", checked.errors.iter().map(|e| &e.msg).collect::<Vec<_>>());
+}

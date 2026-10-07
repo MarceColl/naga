@@ -48,9 +48,10 @@ pub fn record(an: &Analysis, run: usize, bps: Vec<usize>) -> Result<Debug, Strin
     let mut page = None;
     for (i, q) in r.requests.iter().enumerate() {
         reqs.push(format!("{} {}", q.verb, q.path));
-        let Ok((word, Ok(subj))) = crate::runs::start(p, q, page.as_ref()) else { continue };
+        let clock = crate::runs::clock(r, i);
+        let Ok((word, Ok(subj))) = crate::runs::start(p, q, page.as_ref(), clock) else { continue };
         let mut s = machine::initial(p, &word, std::sync::Arc::new(subj));
-        let mut rt = Runtime { log: &mut log, store: Some(&mut store), store_error: None };
+        let mut rt = Runtime { log: &mut log, store: Some(&mut store), store_error: None, clock };
         hist.push(Snap { req: i, st: s.clone() });
         for _ in 0..BUDGET {
             if s.status != Status::Ready {

@@ -75,14 +75,16 @@ pub fn compile_where(t: &Table, pattern: Option<&[PatEntry]>, guard: Option<&Exp
                     return Ok(format!("({a} {sql} {b})"));
                 }
                 Expr::Call(f, args) => {
-                    let m = match f {
-                        Builtin::Len => Some("length"),
-                        Builtin::Abs => Some("abs"),
-                        Builtin::Round => Some("round"),
-                        Builtin::Min | Builtin::Max if args.len() >= 2 => Some(if *f == Builtin::Min { "min" } else { "max" }),
+                    let m = match f.name {
+                        "len" => Some("length"),
+                        "abs" => Some("abs"),
+                        "round" => Some("round"),
+                        "lower" => Some("lower"),
+                        "upper" => Some("upper"),
+                        "min" | "max" if args.len() >= 2 => Some(f.name),
                         _ => None,
                     };
-                    let Some(m) = m else { return Err(format!("{}() can't be used inside a where", f.name())) };
+                    let Some(m) = m else { return Err(format!("{}() can't be used inside a where", f.name)) };
                     let args = args.iter().map(|a| self.expr(a)).collect::<Result<Vec<_>, _>>()?;
                     return Ok(format!("{m}({})", args.join(", ")));
                 }
@@ -415,7 +417,7 @@ impl Store {
         for sd in p.seeds.iter().filter(|sd| only.contains(&sd.table)) {
             let Some(t) = p.tables.get(&sd.table) else { continue };
             let at = |e| (sd.line, e);
-            let rows = eval(&sd.expr, &Env { subj: &Rec::new(), now: 0.0, outer: &[] }).map_err(at)?;
+            let rows = eval(&sd.expr, &Env { subj: &Rec::new(), now: 0.0, outer: &[], ctx: &Default::default() }).map_err(at)?;
             let Value::List(rows) = rows else {
                 return Err(at(RunError { msg: format!("seed {} needs a list of records, got {}", sd.table, rows.type_name()), details: vec![] }));
             };

@@ -117,11 +117,12 @@ pub fn mount(live: &Live, raw: &Raw) -> Option<(u16, String)> {
     let page = p.lives.iter().find_map(|l| Some((l, l.bind(path_part)?)))?;
     let query: Pairs = query.split('&').filter(|q| !q.is_empty()).map(|q| q.split_once('=').unwrap_or((q, ""))).map(|(k, v)| (k.into(), v.into())).collect();
     let req = Req { route: 0, path: page.1, query, body: String::new() };
-    let subj = match request(page.0, &req) {
+    let clock = crate::funcs::Clock::now();
+    let subj = match request(page.0, &req, clock) {
         Ok(s) => s,
         Err(msg) => return Some((400, trouble(&msg))),
     };
-    let ran = live.with_store(|s| run_word(&p, s, &page.0.word, subj));
+    let ran = live.with_store(|s| run_word(&p, s, &page.0.word, subj, clock));
     let (state, html) = match ran.and_then(|r| r.out).and_then(|subj| split(&subj)) {
         Ok(x) => x,
         Err(msg) => return Some((500, trouble(&msg))),
@@ -169,7 +170,7 @@ fn run_on(live: &Live, session: &Mutex<Session>, event: Option<Value>) -> bool {
         subj.insert("event".into(), e);
     }
     let p = live.program();
-    let ran = live.with_store(|st| run_word(&p, st, &s.word, subj));
+    let ran = live.with_store(|st| run_word(&p, st, &s.word, subj, crate::funcs::Clock::now()));
     let wrote = ran.as_ref().is_ok_and(|r| r.sql.iter().any(|q| ["INSERT", "UPDATE", "DELETE"].iter().any(|w| q.starts_with(w))));
     let html = match ran.and_then(|r| r.out).and_then(|subj| split(&subj)) {
         Ok((state, html)) => {
@@ -236,7 +237,7 @@ mod tests {
     fn eval(src: &str) -> Value {
         let p = parse(&format!("main = +{{v: {src}}}\n"));
         let crate::ast::StmtKind::Add(fs) = &p.words["main"].clauses[0].body[0].kind else { panic!() };
-        crate::eval::eval(fs[0].expr.as_ref().unwrap(), &crate::eval::Env { subj: &Rec::new(), now: 0.0, outer: &[] }).unwrap()
+        crate::eval::eval(fs[0].expr.as_ref().unwrap(), &crate::eval::Env { subj: &Rec::new(), now: 0.0, outer: &[], ctx: &Default::default() }).unwrap()
     }
 
     #[test]

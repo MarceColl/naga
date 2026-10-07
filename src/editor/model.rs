@@ -28,7 +28,8 @@ pub struct Question {
     pub prompt: String,
 }
 
-const EXAMPLES: [(&str, &str); 10] = [
+const EXAMPLES: [(&str, &str); 11] = [
+    ("accounts", include_str!("../../examples/accounts.nag")),
     ("countdown", include_str!("../../examples/countdown.nag")),
     ("counter", include_str!("../../examples/counter.nag")),
     ("customers", include_str!("../../examples/customers.nag")),
@@ -48,7 +49,7 @@ fn system() -> String {
          program has and the record each word takes and leaves; `help` and `examples` show the language. \
          Then `try_fill` your code: it parses it, runs the checker and the program's runs. When it passes, \
          answer with `fill`. Use only fields the record has. Keep it short and in the program's style.\n\n{}",
-        help::TEXT
+        &*help::TEXT
     )
 }
 

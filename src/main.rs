@@ -99,7 +99,7 @@ fn init() -> Result<(), String> {
 fn serve(file: &str, port: u16) -> Result<(), String> {
     let db = std::path::Path::new(file).with_extension("db");
     let router = naga::serve::start(read(file)?, db.clone())?;
-    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let rt = naga::serve::runtime().map_err(|e| e.to_string())?;
     rt.block_on(async {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| format!("naga: port {port}: {e}"))?;
         println!("naga: {file} on http://127.0.0.1:{port}, tables in {}", db.display());

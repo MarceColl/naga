@@ -1,6 +1,6 @@
-//! `naga serve`: axum in front, one interpreter thread behind. Values are `Rc`, so the program,
-//! its store and every record stay on that thread; a request crosses over as strings and its
-//! answer comes back as a status and JSON text.
+//! The server: axum in front, the program behind. Requests run in parallel on tokio's
+//! blocking threads, each on the program as it is when it arrives and with a connection of its
+//! own to the database; `Live` holds both.
 use crate::ast::*;
 use crate::machine::{Runtime, Status, initial, step};
 use crate::num::json_str;
@@ -9,9 +9,7 @@ use crate::syntax::parse;
 use crate::value::*;
 use axum::Router;
 use axum::http::{StatusCode, header};
-use std::sync::Arc;
-use std::sync::mpsc;
-use tokio::sync::oneshot;
+use std::sync::{Arc, Mutex, RwLock};
 
 const BUDGET: usize = 200_000;
 
@@ -40,21 +38,76 @@ pub struct Raw {
     pub body: String,
 }
 
-/// Where a request's answer goes: a status and JSON text.
-pub type Reply = oneshot::Sender<(u16, String)>;
+/// A running program: the version requests run on (replaced as it changes) and the database
+/// they share, a connection per request at a time.
+pub struct Live {
+    program: RwLock<Arc<Program>>,
+    db: std::path::PathBuf,
+    idle: Mutex<Vec<Store>>,
+}
 
-/// The server: every request goes, as text, to `send`, whose owner holds the program and
-/// answers through the `Reply`. Routes live in the program, so they can change while it runs.
-pub fn router(send: impl Fn(Raw, Reply) + Clone + Send + Sync + 'static) -> Router {
+impl Live {
+    /// The program at `db`, its tables made to fit it.
+    pub fn open(p: Arc<Program>, db: &std::path::Path) -> Result<(Arc<Live>, Migration), String> {
+        let (store, m) = open(&p, db)?;
+        Ok((Arc::new(Live { program: RwLock::new(p), db: db.into(), idle: Mutex::new(vec![store]) }), m))
+    }
+
+    pub fn program(&self) -> Arc<Program> {
+        self.program.read().map_or_else(|e| e.into_inner().clone(), |p| p.clone())
+    }
+
+    /// From the next request on, requests run on `p`.
+    pub fn publish(&self, p: Arc<Program>) {
+        if let Ok(mut cur) = self.program.write() {
+            *cur = p;
+        }
+    }
+
+    /// Runs `f` with a connection to the database, from the idle ones or a new one.
+    pub fn with_store<R>(&self, f: impl FnOnce(&mut Store) -> R) -> Result<R, String> {
+        let idle = self.idle.lock().ok().and_then(|mut v| v.pop());
+        let mut store = match idle {
+            Some(s) => s,
+            None => Store::connect(&self.db).map_err(|e| e.msg)?,
+        };
+        let r = f(&mut store);
+        store.log.clear();
+        if let Ok(mut v) = self.idle.lock() {
+            v.push(store);
+        }
+        Ok(r)
+    }
+
+    /// Answers a request on the program as it is now.
+    pub fn answer(&self, raw: &Raw) -> Handled {
+        let p = self.program();
+        self.with_store(|s| respond(&p, s, raw)).unwrap_or_else(|e| Handled { status: 500, json: error(&e), stop: Status::Error, said: vec![], sql: vec![] })
+    }
+}
+
+/// The server: every request is answered by `live` on a blocking thread; `after` hears what
+/// each one got (the editor shows it, `naga serve` prints what words said).
+pub fn router(live: Arc<Live>, after: impl Fn(&Raw, &Handled) + Clone + Send + Sync + 'static) -> Router {
     Router::new().fallback(move |method: axum::http::Method, uri: axum::http::Uri, body: String| {
-        let send = send.clone();
+        let (live, after) = (live.clone(), after.clone());
         async move {
-            let (reply, answer) = oneshot::channel();
-            send(Raw { method: method.to_string(), path: uri.path().into(), query: uri.query().unwrap_or("").into(), body }, reply);
-            let (status, json) = answer.await.unwrap_or_else(|_| (500, error("the program stopped")));
-            (StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), [(header::CONTENT_TYPE, "application/json")], json)
+            let raw = Raw { method: method.to_string(), path: uri.path().into(), query: uri.query().unwrap_or("").into(), body };
+            let h = tokio::task::spawn_blocking(move || {
+                let h = live.answer(&raw);
+                after(&raw, &h);
+                h
+            })
+            .await
+            .unwrap_or_else(|_| Handled { status: 500, json: error("the request stopped"), stop: Status::Error, said: vec![], sql: vec![] });
+            (StatusCode::from_u16(h.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), [(header::CONTENT_TYPE, "application/json")], h.json)
         }
     })
+}
+
+/// A runtime whose blocking threads have room for deep programs (the interpreter recurses).
+pub fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(64 << 20).build()
 }
 
 /// Answers a request with the program: its route's word, or the list of routes at `GET /`
@@ -73,36 +126,12 @@ pub fn respond(p: &Program, store: &mut Store, raw: &Raw) -> Handled {
     Handled { status, json, stop: Status::Done, said: vec![], sql: vec![] }
 }
 
-/// `naga serve`: parses `src`, opens the store at `db` (creating and seeding new tables) and
-/// runs every request on one interpreter thread.
+/// `naga serve`: parses `src` and opens its tables at `db`; words' `say` lines are printed.
 pub fn start(src: String, db: std::path::PathBuf) -> Result<Router, String> {
-    let (tx, rx) = mpsc::channel::<(Raw, Reply)>();
-    let (ready_tx, ready_rx) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("naga".into())
-        .stack_size(256 << 20)
-        .spawn(move || {
-            let p = parse(&src);
-            let mut store = match open(&p, &db) {
-                Ok((s, m)) => {
-                    m.applied.iter().for_each(|a| println!("naga: {a}"));
-                    m.pending.iter().for_each(|a| println!("naga: pending: {a} — the table keeps its old shape"));
-                    s
-                }
-                Err(e) => return drop(ready_tx.send(Err(e))),
-            };
-            let _ = ready_tx.send(Ok(()));
-            for (raw, reply) in rx {
-                let h = respond(&p, &mut store, &raw);
-                for l in &h.said {
-                    println!("{} {} > {l}", raw.method, raw.path);
-                }
-                let _ = reply.send((h.status, h.json));
-            }
-        })
-        .map_err(|e| e.to_string())?;
-    ready_rx.recv().map_err(|_| "the interpreter stopped while starting".to_string())??;
-    Ok(router(move |raw, reply| drop(tx.send((raw, reply)))))
+    let (live, m) = Live::open(Arc::new(parse(&src)), &db)?;
+    m.applied.iter().for_each(|a| println!("naga: {a}"));
+    m.pending.iter().for_each(|a| println!("naga: pending: {a} — the table keeps its old shape"));
+    Ok(router(live, |raw, h| h.said.iter().for_each(|l| println!("{} {} > {l}", raw.method, raw.path))))
 }
 
 pub fn open(p: &Program, db: &std::path::Path) -> Result<(Store, Migration), String> {

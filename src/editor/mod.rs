@@ -26,14 +26,15 @@ use winit::window::{Window, WindowId};
 enum Wake {
     Reply(u64, Result<claude::Fill, String>),
     /// A request for the live server, answered on this thread with the editor's program.
-    Request(crate::serve::Raw, crate::serve::Reply),
+    /// The live server answered a request: `GET /notes → 200`.
+    Served(String),
 }
 
 struct App {
     proxy: EventLoopProxy<Wake>,
     quit: bool,
     /// The live server's tables, when the editor is serving.
-    store: Option<crate::store::Store>,
+    live: Option<Arc<crate::serve::Live>>,
     state: Option<State>,
     frame: Frame,
     gpu: Option<gpu::Gpu>,
@@ -49,31 +50,36 @@ impl App {
         // the image (the last text that parsed) is what's live: the file, the tables, the server
         let before = self.state.as_ref().map(|s| s.image.clone());
         let mut next = update(self.state.take().expect("a state"), ev);
-        // the live database follows the program: safe changes at once, the rest pending
-        if let Some(store) = &mut self.store {
+        if let Some(live) = &self.live {
+            let p = next.image.program.clone();
+            // a new image: its tables fit it first, then requests run on it
             if before.as_ref().is_some_and(|b| b.text != next.image.text) {
-                match store.migrate(&next.image.program) {
+                match live.with_store(|s| s.migrate(&p)).and_then(|m| m.map_err(|e| e.msg)) {
                     Ok(m) => {
                         if !m.applied.is_empty() {
                             next.msg = Some((format!("live · {}", m.applied.join(" · ")), state::Tone::Ok));
                         }
                         next.pending = m.pending;
                     }
-                    Err(e) => next.msg = Some((format!("live database: {}", e.msg), state::Tone::No)),
+                    Err(e) => next.msg = Some((format!("live database: {e}"), state::Tone::No)),
                 }
+                live.publish(p.clone());
             }
             if let Some(state::Effect::Reset(t)) = next.effect.clone() {
                 next.effect = None;
-                next.msg = Some(match store.reset(&next.image.program, &t) {
-                    Ok(()) => (format!("reset {t}: recreated and seeded"), state::Tone::Ok),
-                    Err(e) => (format!("reset {t}: {}", e.msg), state::Tone::No),
+                next.msg = Some(match live.with_store(|s| s.reset(&p, &t).and_then(|_| s.migrate(&p))) {
+                    Ok(Ok(m)) => {
+                        next.pending = m.pending;
+                        (format!("reset {t}: recreated and seeded"), state::Tone::Ok)
+                    }
+                    Ok(Err(e)) => (format!("reset {t}: {}", e.msg), state::Tone::No),
+                    Err(e) => (format!("reset {t}: {e}"), state::Tone::No),
                 });
-                next.pending = store.migrate(&next.image.program).map(|m| m.pending).unwrap_or_default();
             }
-        }
-        // while the data view is open it shows the live tables as they are now
-        if let (Some(store), Some(_)) = (&mut self.store, &next.data) {
-            next.live_tables = store.snapshot(&next.image.program).ok().map(Rc::new);
+            // while the data view is open it shows the live tables as they are now
+            if next.data.is_some() {
+                next.live_tables = live.with_store(|s| s.snapshot(&p)).ok().and_then(Result::ok).map(Rc::new);
+            }
         }
         if next.effect == Some(state::Effect::Quit) {
             self.quit = true;
@@ -109,13 +115,7 @@ impl ApplicationHandler<Wake> for App {
     fn user_event(&mut self, _: &ActiveEventLoop, w: Wake) {
         match w {
             Wake::Reply(id, r) => self.send(Event::AgentReply(id, r)),
-            Wake::Request(raw, reply) => {
-                let (Some(st), Some(store)) = (&self.state, &mut self.store) else { return };
-                let h = crate::serve::respond(&st.image.program, store, &raw);
-                let line = format!("{} {}{} → {}", raw.method, raw.path, if raw.query.is_empty() { String::new() } else { format!("?{}", raw.query) }, h.status);
-                let _ = reply.send((h.status, h.json));
-                self.send(Event::Served(line));
-            }
+            Wake::Served(line) => self.send(Event::Served(line)),
         }
     }
 
@@ -299,32 +299,37 @@ pub fn edit(path: &str, args: &[String]) -> Result<(), String> {
     }
     let frame = view(&state);
     let el = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
-    let mut app = App { proxy: el.create_proxy(), quit: false, store: None, state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into() };
+    let mut app = App { proxy: el.create_proxy(), quit: false, live: None, state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into() };
     el.run_app(&mut app).map_err(|e| e.to_string())
 }
 
-/// `naga start`: the editor, serving the program it edits on `port`. Requests run on the
-/// editor's thread, on the program as it is at that moment, against the tables in `db`.
+/// `naga start`: the editor, serving the program it edits on `port`. Each image the editor
+/// publishes is what requests run on from then on; they run in parallel, off the editor's
+/// thread, against the tables in `db`.
 pub fn start(path: &str, port: u16) -> Result<(), String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("naga: {path}: {e}"))?;
     let mut state = State::new(&text);
     let db = std::path::Path::new(path).with_extension("db");
-    let (store, m) = crate::serve::open(&state.an.program, &db)?;
+    let (live, m) = crate::serve::Live::open(state.image.program.clone(), &db)?;
     state.pending = m.pending;
     let el = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
     let proxy = el.create_proxy();
     let listener = std::net::TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("naga: port {port}: {e}"))?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let server = live.clone();
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("a runtime");
+        let rt = crate::serve::runtime().expect("a runtime");
         rt.block_on(async move {
             let listener = tokio::net::TcpListener::from_std(listener).expect("the listener");
-            let app = crate::serve::router(move |raw, reply| drop(proxy.send_event(Wake::Request(raw, reply))));
+            let app = crate::serve::router(server, move |raw, h| {
+                let q = if raw.query.is_empty() { String::new() } else { format!("?{}", raw.query) };
+                let _ = proxy.send_event(Wake::Served(format!("{} {}{q} → {}", raw.method, raw.path, h.status)));
+            });
             let _ = axum::serve(listener, app).await;
         });
     });
     state.live = Some((port, None));
     let frame = view(&state);
-    let mut app = App { proxy: el.create_proxy(), quit: false, store: Some(store), state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into() };
+    let mut app = App { proxy: el.create_proxy(), quit: false, live: Some(live), state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into() };
     el.run_app(&mut app).map_err(|e| e.to_string())
 }

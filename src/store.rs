@@ -261,9 +261,18 @@ impl Store {
 
     /// A database file that outlives the run, made to fit the program (see `migrate`).
     pub fn open(p: &Program, path: &std::path::Path) -> Result<(Store, Migration), RunError> {
-        let mut s = Store { db: Connection::open(path).map_err(sql_err)?, log: vec![], tick: -1 };
+        let mut s = Store::connect(path)?;
         let m = s.migrate(p)?;
         Ok((s, m))
+    }
+
+    /// Another connection to a database file, for one more request at a time. WAL lets readers
+    /// run beside the writer; a busy writer is waited for rather than failed.
+    pub fn connect(path: &std::path::Path) -> Result<Store, RunError> {
+        let db = Connection::open(path).map_err(sql_err)?;
+        db.pragma_update(None, "journal_mode", "wal").map_err(sql_err)?;
+        db.busy_timeout(std::time::Duration::from_secs(5)).map_err(sql_err)?;
+        Ok(Store { db, log: vec![], tick: -1 })
     }
 
     fn create(&mut self, t: &Table) -> Result<(), RunError> {

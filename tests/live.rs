@@ -53,3 +53,43 @@ fn reopening_migrates_too() {
     let (_, m) = Store::open(&v2, &path).unwrap();
     assert_eq!(m.applied, ["added notes.done"]);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn requests_run_in_parallel_and_every_write_lands() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+    let src = "table notes :: {title: Text}\nroute POST /notes {title: Text} = add\nroute GET /notes = all\nadd = +{note: {title: body.title}} notes.insert +{status: 201, json: note}\nall = notes.all +{status: 200, json: len(notes)}\n";
+    let app = naga::serve::start(src.into(), db("parallel")).unwrap();
+    let posts = (0..64).map(|i| {
+        let app = app.clone();
+        tokio::spawn(async move {
+            let req = Request::post("/notes").body(Body::from(format!("{{\"title\":\"n{i}\"}}"))).unwrap();
+            app.oneshot(req).await.unwrap().status().as_u16()
+        })
+    });
+    let statuses: Vec<u16> = futures_join(posts).await;
+    assert!(statuses.iter().all(|s| *s == 201), "{statuses:?}");
+    let res = app.oneshot(Request::get("/notes").body(Body::empty()).unwrap()).await.unwrap();
+    let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"64");
+}
+
+async fn futures_join(hs: impl Iterator<Item = tokio::task::JoinHandle<u16>>) -> Vec<u16> {
+    let mut out = vec![];
+    for h in hs.collect::<Vec<_>>() {
+        out.push(h.await.unwrap());
+    }
+    out
+}
+
+#[test]
+fn a_published_program_answers_the_next_request() {
+    use naga::serve::{Live, Raw};
+    let v1 = std::sync::Arc::new(parse("route GET /x = w\nw = +{status: 200, json: 1}\n"));
+    let (live, _) = Live::open(v1, &db("publish")).unwrap();
+    let get = || live.answer(&Raw { method: "GET".into(), path: "/x".into(), query: String::new(), body: String::new() }).json;
+    assert_eq!(get(), "1");
+    live.publish(std::sync::Arc::new(parse("route GET /x = w\nw = +{status: 200, json: 2}\n")));
+    assert_eq!(get(), "2");
+}

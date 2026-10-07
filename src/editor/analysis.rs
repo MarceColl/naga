@@ -79,7 +79,8 @@ pub struct Error {
 pub struct Analysis {
     pub text: String,
     pub lines: Vec<Vec<char>>,
-    pub program: Program,
+    /// Shared: when it parses, it is what the live server runs.
+    pub program: std::sync::Arc<Program>,
     pub checked: Option<Checked>,
     pub errors: Vec<Error>,
     pub runs: Vec<Outcome>,
@@ -99,7 +100,7 @@ impl Analysis {
     /// texts: a keystroke rechecks only the words it touched.
     pub fn with(text: &str, checker: &mut Checker) -> Analysis {
         let lines: Vec<Vec<char>> = text.split('\n').map(|l| l.chars().collect()).collect();
-        let program = parse(text);
+        let program = std::sync::Arc::new(parse(text));
         let mut errors: Vec<Error> = program.errors.iter().map(|e| Error { line: e.line, col: e.col, msg: e.msg.clone(), detail: None }).collect();
         let (mut checked, mut runs) = (None, vec![]);
         if errors.is_empty() {

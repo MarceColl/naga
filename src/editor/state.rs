@@ -620,7 +620,7 @@ pub mod tests {
     }
 
     #[test]
-    fn the_data_view_shows_the_live_rows_marked_against_the_seed() {
+    fn the_data_view_shows_the_live_rows() {
         use crate::value::Value;
         let src = "table ts :: {n: Num}\nseed ts = [{n: 1}]\n";
         let row = |id: f64, n: f64| Value::Rec(Rc::new([("id".into(), Value::Num(id)), ("n".into(), Value::Num(n))].into_iter().collect()));
@@ -630,7 +630,7 @@ pub mod tests {
         assert_eq!(st.data, Some(Data { table: "ts".into(), rows: Rows::Live }));
         let f = crate::editor::view::view(&st);
         let text: Vec<String> = f.code.iter().map(|l| l.spans.iter().map(|s| s.text.as_str()).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")).collect();
-        assert!(text.contains(&"~ 1 5".to_string()) && text.contains(&"+ 2 7".to_string()), "{text:?}");
+        assert!(text.contains(&"1 5".to_string()) && text.contains(&"2 7".to_string()), "live rows, unmarked: {text:?}");
         assert_eq!(keys(st, "l").data.map(|d| d.rows), Some(Rows::Seed));
     }
 

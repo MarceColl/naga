@@ -141,11 +141,13 @@ impl ApplicationHandler<Wake> for App {
         if self.gpu.is_some() {
             return;
         }
-        // frameless: the code goes edge to edge; the strip above it moves the window
-        let attrs = Window::default_attributes()
-            .with_title(format!("naga · {}", self.path))
-            .with_decorations(false)
-            .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 860.0));
+        // the code goes edge to edge, under a title bar that keeps only the traffic lights
+        let attrs = Window::default_attributes().with_title(format!("naga · {}", self.path)).with_inner_size(winit::dpi::LogicalSize::new(1280.0, 860.0));
+        #[cfg(target_os = "macos")]
+        let attrs = {
+            use winit::platform::macos::WindowAttributesExtMacOS;
+            attrs.with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true)
+        };
         let window = Arc::new(el.create_window(attrs).expect("a window"));
         let size = window.inner_size();
         self.gpu = Some(pollster::block_on(gpu::Gpu::new(Some(window.clone()), (size.width, size.height), window.scale_factor() as f32)));

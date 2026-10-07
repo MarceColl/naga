@@ -756,7 +756,8 @@ fn data_view(st: &State, d: &Data) -> Frame {
     let id = |r: &Value| r.as_rec().and_then(|r| r.get("id")).map(Value::show).unwrap_or_default();
     let get = |r: &Value, k: &str| r.as_rec().and_then(|r| r.get(k)).cloned();
     let cols: Vec<(Name, ColType, bool)> = std::iter::once(("id".into(), ColType::Int, false)).chain(t.cols.iter().map(|c| (c.name.clone(), c.ty, c.opt))).collect();
-    // every row after, then the ones the run deleted; marked + − ~
+    // a run's rows are marked + − ~ against the seed it started from; live rows aren't
+    let before = if d.rows == Rows::Live { after.clone() } else { before };
     let mut rows: Vec<(Value, char, Vec<Name>)> = vec![];
     for r in &after {
         let old = before.iter().find(|b| id(b) == id(r));
@@ -847,7 +848,6 @@ fn data_view(st: &State, d: &Data) -> Frame {
     match (d.rows, run) {
         (Rows::Live, _) => {
             second.push("LIVE, NOW", Style::plain(CALL), None);
-            second.push(&format!(" · +{} −{} ~{} SINCE THE SEED", n('+'), n('−'), n('~')), Style::plain(DIM), None);
         }
         (_, None) => second.push("AS SEEDED", Style::plain(FG), None),
         (_, Some((i, o, r))) => {

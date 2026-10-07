@@ -28,7 +28,12 @@ enum Wake {
     /// A request for the live server, answered on this thread with the editor's program.
     /// The live server answered a request: `GET /notes → 200`.
     Served(String),
+    /// An image's runs, run on their own thread.
+    Ran(state::Runs),
 }
+
+/// How long typing pauses before the image goes live: its tables, the server, its runs.
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
 
 struct App {
     proxy: EventLoopProxy<Wake>,
@@ -43,6 +48,8 @@ struct App {
     mods: ModifiersState,
     pressed: bool,
     path: String,
+    /// When the image goes live, if a new one is waiting.
+    settle: Option<std::time::Instant>,
 }
 
 impl App {
@@ -50,21 +57,11 @@ impl App {
         // the image (the last text that parsed) is what's live: the file, the tables, the server
         let before = self.state.as_ref().map(|s| s.image.clone());
         let mut next = update(self.state.take().expect("a state"), ev);
+        if before.as_ref().is_some_and(|b| b.text != next.image.text) {
+            self.settle = Some(std::time::Instant::now() + SETTLE);
+        }
         if let Some(live) = &self.live {
             let p = next.image.program.clone();
-            // a new image: its tables fit it first, then requests run on it
-            if before.as_ref().is_some_and(|b| b.text != next.image.text) {
-                match live.with_store(|s| s.migrate(&p)).and_then(|m| m.map_err(|e| e.msg)) {
-                    Ok(m) => {
-                        if !m.applied.is_empty() {
-                            next.msg = Some((format!("live · {}", m.applied.join(" · ")), state::Tone::Ok));
-                        }
-                        next.pending = m.pending;
-                    }
-                    Err(e) => next.msg = Some((format!("live database: {e}"), state::Tone::No)),
-                }
-                live.publish(p.clone());
-            }
             if let Some(state::Effect::Reset(t)) = next.effect.clone() {
                 next.effect = None;
                 next.msg = Some(match live.with_store(|s| s.reset(&p, &t).and_then(|_| s.migrate(&p))) {
@@ -102,6 +99,38 @@ impl App {
             g.redraw();
         }
     }
+    /// Typing paused: the image goes live. Its tables fit it first, then requests and open
+    /// pages run on it; its runs run on their own thread.
+    fn go_live(&mut self) {
+        self.settle = None;
+        let Some(mut st) = self.state.take() else { return };
+        let p = st.image.program.clone();
+        if let Some(live) = &self.live {
+            match live.with_store(|s| s.migrate(&p)).and_then(|m| m.map_err(|e| e.msg)) {
+                Ok(m) => {
+                    if !m.applied.is_empty() {
+                        st.msg = Some((format!("live · {}", m.applied.join(" · ")), state::Tone::Ok));
+                    }
+                    st.pending = m.pending;
+                }
+                Err(e) => st.msg = Some((format!("live database: {e}"), state::Tone::No)),
+            }
+            live.publish(p.clone());
+        }
+        let (proxy, text) = (self.proxy.clone(), st.image.text.clone());
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(move || {
+                let _ = proxy.send_event(Wake::Ran(state::Runs::new(text, &p)));
+            })
+            .ok();
+        self.frame = view(&st);
+        self.state = Some(st);
+        if let Some(g) = &self.gpu {
+            g.redraw();
+        }
+    }
+
     fn pos(&self) -> Option<crate::ast::Pos> {
         self.gpu.as_ref()?.pos_at(&self.frame, self.cursor.0, self.cursor.1)
     }
@@ -116,6 +145,7 @@ impl ApplicationHandler<Wake> for App {
         match w {
             Wake::Reply(id, r) => self.send(Event::AgentReply(id, r)),
             Wake::Served(line) => self.send(Event::Served(line)),
+            Wake::Ran(runs) => self.send(Event::Ran(Rc::new(runs))),
         }
     }
 
@@ -125,15 +155,19 @@ impl ApplicationHandler<Wake> for App {
             return el.exit();
         }
         let typing = self.state.as_ref().and_then(|s| s.agent.as_ref()).is_some_and(|a| a.fill.is_some());
-        el.set_control_flow(match typing {
-            true => ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(16)),
-            false => ControlFlow::Wait,
+        let tick = typing.then(|| std::time::Instant::now() + std::time::Duration::from_millis(16));
+        el.set_control_flow(match tick.into_iter().chain(self.settle).min() {
+            Some(t) => ControlFlow::WaitUntil(t),
+            None => ControlFlow::Wait,
         });
     }
 
     fn new_events(&mut self, _: &ActiveEventLoop, cause: StartCause) {
         if matches!(cause, StartCause::ResumeTimeReached { .. }) {
-            self.send(Event::Tick);
+            match self.settle {
+                Some(t) if t <= std::time::Instant::now() => self.go_live(),
+                _ => self.send(Event::Tick),
+            }
         }
     }
 
@@ -283,6 +317,9 @@ fn shot(state: State, out: &str, opts: &std::collections::HashMap<&str, &str>) -
         let (k, shift) = key(k).ok_or(format!("naga: unknown key {k}"))?;
         st = update(st, Event::Key(k, shift));
     }
+    // the typing is over: the runs catch up
+    let runs = Rc::new(state::Runs::of(&st.image));
+    st = update(st, Event::Ran(runs));
     let f = view(&st);
     g.draw(&f, st.scroll);
     g.save(out)
@@ -299,7 +336,7 @@ pub fn edit(path: &str, args: &[String]) -> Result<(), String> {
     }
     let frame = view(&state);
     let el = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
-    let mut app = App { proxy: el.create_proxy(), quit: false, live: None, state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into() };
+    let mut app = App { proxy: el.create_proxy(), quit: false, live: None, state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into(), settle: None };
     el.run_app(&mut app).map_err(|e| e.to_string())
 }
 
@@ -330,6 +367,6 @@ pub fn start(path: &str, port: u16) -> Result<(), String> {
     });
     state.live = Some((port, None));
     let frame = view(&state);
-    let mut app = App { proxy: el.create_proxy(), quit: false, live: Some(live), state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into() };
+    let mut app = App { proxy: el.create_proxy(), quit: false, live: Some(live), state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into(), settle: None };
     el.run_app(&mut app).map_err(|e| e.to_string())
 }

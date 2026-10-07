@@ -645,7 +645,9 @@ fn stat(st: &State, f: &mut Frame) {
     f.stat.push(&format!("HOLES {holes}"), if holes > 0 { Style::plain(HOLE) } else { dim }, None);
     f.stat.push(" · ", dim, None);
     f.stat.push(&format!("ERRORS {errs}"), if errs > 0 { Style::plain(ERR) } else { dim }, None);
-    f.stat.push(&format!(" · RUNS {}/{}", an.passing(), an.runs.len()), dim, None);
+    // runs trail the image while you type
+    let behind = if st.runs.text == st.image.text { "" } else { " …" };
+    f.stat.push(&format!(" · RUNS {}/{}{behind}", st.runs.passing(), st.runs.out.len()), dim, None);
     if let Some((port, last)) = &st.live {
         f.stat.push(" · ", dim, None);
         f.stat.push(&format!("LIVE :{port}"), Style::plain(CALL), None);
@@ -793,7 +795,7 @@ fn data_view(st: &State, d: &Data) -> Frame {
     let mut f = Frame::default();
     let Some(t) = an.program.tables.get(&d.table) else { return f };
     let run = match d.rows {
-        Rows::Run(i) => an.runs.get(i).zip(an.program.runs.get(i)).map(|(o, r)| (i, o, r)),
+        Rows::Run(i) => st.runs.out.get(i).zip(an.program.runs.get(i)).map(|(o, r)| (i, o, r)),
         _ => None,
     };
     let seeded = an.seeded();
@@ -832,7 +834,7 @@ fn data_view(st: &State, d: &Data) -> Frame {
         head.push(" LIVE ", on(d.rows == Rows::Live, CALL), Some(Target::Rows(Rows::Live)));
     }
     head.push(" SEED ", on(d.rows == Rows::Seed, FAINT), Some(Target::Rows(Rows::Seed)));
-    for (i, o) in an.runs.iter().enumerate() {
+    for (i, o) in st.runs.out.iter().enumerate() {
         head.push(&format!(" {} ", i + 1), on(d.rows == Rows::Run(i), verdict_color(o.verdict)), Some(Target::Rows(Rows::Run(i))));
     }
     f.code.push(head);

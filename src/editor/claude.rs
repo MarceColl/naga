@@ -92,6 +92,6 @@ mod tests {
         let fill = super::ask(&agent::prompt(&an, &h, &a)).expect("Claude answers");
         let cand = Analysis::new(&ops::fill(&an, &h, &fill.code, fill.helpers.as_deref()));
         assert_eq!(agent::judge(&an, &cand), Ok(()), "{}", cand.text);
-        assert_eq!(cand.passing(), 1, "{}", cand.text);
+        assert_eq!(crate::editor::state::Runs::of(&cand).passing(), 1, "{}", cand.text);
     }
 }

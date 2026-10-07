@@ -45,7 +45,7 @@ pub fn judge(base: &Analysis, cand: &Analysis) -> Result<(), String> {
         return Err(format!("checker: {}", e.msg));
     }
     let broken = |v: Verdict| matches!(v, Verdict::Fail | Verdict::Error);
-    for (i, (r, b)) in cand.runs.iter().zip(&base.runs).enumerate() {
+    for (i, (r, b)) in crate::runs::all(&cand.program).iter().zip(&crate::runs::all(&base.program)).enumerate() {
         if broken(r.verdict) && r.verdict != b.verdict {
             let name = cand.program.runs.get(i).map_or("", |r| r.name.as_str());
             return Err(match r.verdict {
@@ -74,7 +74,7 @@ pub fn prompt(an: &Analysis, hole: &Step, a: &Agent) -> String {
         .program
         .runs
         .iter()
-        .zip(&an.runs)
+        .zip(crate::runs::all(&an.program))
         .map(|(r, o)| format!("- “{}”: {}{}", r.name, o.verdict.name(), if o.verdict == Verdict::Pass { String::new() } else { format!(" (answered {}; expected {})", o.said.join(" / "), o.want.join(" / ")) }))
         .collect();
     if !runs.is_empty() {

@@ -2,7 +2,6 @@
 //! definitions, holes, errors, the checker's shapes, and the runs.
 use crate::ast::{Clause, Pos, Program, Stmt, StmtKind};
 use crate::check::{Checked, Checker, Point};
-use crate::runs::{Outcome, run};
 use crate::syntax::parse;
 use crate::value::Name;
 use std::collections::HashMap;
@@ -83,7 +82,6 @@ pub struct Analysis {
     pub program: std::sync::Arc<Program>,
     pub checked: Option<Checked>,
     pub errors: Vec<Error>,
-    pub runs: Vec<Outcome>,
     pub steps: Vec<Step>,
     by_id: HashMap<usize, usize>,
     pub defs: Vec<Def>,
@@ -102,7 +100,7 @@ impl Analysis {
         let lines: Vec<Vec<char>> = text.split('\n').map(|l| l.chars().collect()).collect();
         let program = std::sync::Arc::new(parse(text));
         let mut errors: Vec<Error> = program.errors.iter().map(|e| Error { line: e.line, col: e.col, msg: e.msg.clone(), detail: None }).collect();
-        let (mut checked, mut runs) = (None, vec![]);
+        let mut checked = None;
         if errors.is_empty() {
             let entry = program.words.contains_key("main").then(|| Name::from("main"));
             let c = checker.check(&program, entry.as_ref());
@@ -112,9 +110,8 @@ impl Analysis {
                 }
             }
             checked = Some(c);
-            runs = program.runs.iter().map(|r| run(&program, r)).collect();
         }
-        let mut an = Analysis { text: text.into(), lines, program, checked, errors, runs, steps: vec![], by_id: HashMap::new(), defs: vec![], cells: vec![] };
+        let mut an = Analysis { text: text.into(), lines, program, checked, errors, steps: vec![], by_id: HashMap::new(), defs: vec![], cells: vec![] };
         let words: Vec<(Name, Vec<Clause>)> = an.program.words.values().map(|w| (w.name.clone(), w.clauses.clone())).collect();
         for (name, clauses) in words {
             for (ci, c) in clauses.iter().enumerate() {
@@ -178,9 +175,6 @@ impl Analysis {
 
     /// Every table's rows as seeded, even while the program doesn't parse.
     pub fn seeded(&self) -> crate::runs::Tables {
-        if let Some(r) = self.runs.first() {
-            return r.seed.clone();
-        }
         let all: Vec<Name> = self.program.tables.keys().cloned().collect();
         let store = crate::store::Store::new(&self.program).ok().and_then(|mut s| s.seed(&self.program, &all).ok().map(|_| s));
         store.and_then(|mut s| s.snapshot(&self.program).ok()).unwrap_or_default()
@@ -201,10 +195,6 @@ impl Analysis {
             out = best(c.before.get(&(hole.range.pos.line, hole.range.pos.col)));
         }
         out
-    }
-
-    pub fn passing(&self) -> usize {
-        self.runs.iter().filter(|r| r.verdict == crate::runs::Verdict::Pass).count()
     }
 }
 

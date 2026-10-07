@@ -40,8 +40,10 @@ async fn a_click_runs_the_word_and_the_page_comes_back() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_write_from_one_page_shows_on_every_page_and_so_does_a_new_program() {
-    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/board.nag")).unwrap();
-    let (live, _) = naga::serve::Live::open(std::sync::Arc::new(naga::syntax::parse(&src)), &db("board")).unwrap();
+    let src = "table notes :: {text: Text}\nlive /board = board\n\
+board {event: {name: :add}} = +{note: {text: event.form.text}} notes.insert -{note} render\nboard = render\n\
+render = notes.all @notes( +{li: [:li, text]} ) +{html: [:main, [:ul, notes.li]]} -{notes}\n";
+    let (live, _) = naga::serve::Live::open(std::sync::Arc::new(naga::syntax::parse(src)), &db("board")).unwrap();
     let app = naga::serve::router(live.clone(), |_, _| {});
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

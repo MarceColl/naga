@@ -96,6 +96,11 @@ pub fn start(p: &Program, q: &Request, page: Option<&(Name, Rec)>) -> Result<(Na
     }
 }
 
+/// Every run the program declares, in order.
+pub fn all(p: &Program) -> Vec<Outcome> {
+    p.runs.iter().map(|r| run(p, r)).collect()
+}
+
 pub fn run(p: &Program, r: &Run) -> Outcome {
     let out = Outcome::default();
     let all: Vec<Name> = p.tables.keys().cloned().collect();

@@ -1,7 +1,8 @@
 //! The editor's state and the one function that changes it. `update` takes a state and an
 //! event and returns the next state. The buffer's text is the only data: the analysis is
 //! recomputed from it on every change, and `image` — what the server runs and what's on
-//! disk — follows it whenever it parses.
+//! disk — follows it whenever it parses. The image's runs run off this thread once typing
+//! pauses, and come back as `Event::Ran`.
 use crate::ast::Pos;
 use crate::check::Checker;
 use crate::editor::agent::{self, Agent};
@@ -86,6 +87,33 @@ pub enum Event {
     Tick,
     /// The live server answered a request: `GET /accounts/1 → 200`.
     Served(String),
+    /// What the runs of this text did.
+    Ran(Rc<Runs>),
+}
+
+/// What an image's runs did, and which text they ran.
+#[derive(Debug)]
+pub struct Runs {
+    pub text: String,
+    pub out: Vec<crate::runs::Outcome>,
+}
+
+impl Runs {
+    pub fn of(an: &Analysis) -> Runs {
+        Runs::new(an.text.clone(), &an.program)
+    }
+    pub fn new(text: String, p: &crate::ast::Program) -> Runs {
+        Runs { text, out: if p.errors.is_empty() { crate::runs::all(p) } else { vec![] } }
+    }
+    pub fn passing(&self) -> usize {
+        self.out.iter().filter(|r| r.verdict == crate::runs::Verdict::Pass).count()
+    }
+}
+
+impl PartialEq for Runs {
+    fn eq(&self, o: &Runs) -> bool {
+        self.text == o.text && self.out.iter().map(|r| (r.verdict, &r.said)).eq(o.out.iter().map(|r| (r.verdict, &r.said)))
+    }
 }
 
 /// Which rows the data view shows.
@@ -111,6 +139,8 @@ pub struct State {
     pub an: Rc<Analysis>,
     /// The last text that parsed: what the server runs and what the file holds.
     pub image: Rc<Analysis>,
+    /// The image's runs, or an earlier image's until they catch up.
+    pub runs: Rc<Runs>,
     pub checker: Rc<RefCell<Checker>>,
     pub cursor: Pos,
     /// The column up and down aim for.
@@ -160,6 +190,7 @@ impl State {
         let an = Rc::new(Analysis::with(text, &mut checker.borrow_mut()));
         State {
             image: an.clone(),
+            runs: Rc::new(Runs::of(&an)),
             an,
             checker,
             cursor: Pos { line: 1, col: 0 },
@@ -231,14 +262,13 @@ impl State {
     }
 }
 
-/// `checker clean · runs 7/7`, or how many errors there are.
+/// `checker clean`, or how many errors there are.
 pub fn status(an: &Analysis) -> String {
-    let checker = match an.errors.len() {
+    match an.errors.len() {
         0 => "checker clean".to_string(),
         1 => "1 checker error".to_string(),
         n => format!("{n} checker errors"),
-    };
-    format!("{checker} · runs {}/{}", an.passing(), an.runs.len())
+    }
 }
 
 /// A whole-program change from a command or the agent: kept for undo, said in the bar.
@@ -278,6 +308,8 @@ pub fn update(st: State, ev: Event) -> State {
     match ev {
         Event::AgentReply(..) | Event::Tick => st,
         Event::Served(line) => State { live: st.live.map(|(port, _)| (port, Some(line))), ..st },
+        Event::Ran(runs) if runs.text == st.image.text => State { runs, ..st },
+        Event::Ran(_) => st,
         Event::Viewport(rows, lines) => State { rows, row_lines: Rc::new(lines), ..st },
         Event::Scroll(dy) => State { scroll: (st.scroll + dy).clamp(0.0, st.row_lines.len() as f32), ..st },
         Event::Key(k, _) if st.help.is_some() => {
@@ -328,7 +360,7 @@ pub fn open_data(st: State, table: &str) -> State {
 
 fn data(st: State, d: Data, ev: Event) -> State {
     let tables: Vec<Name> = st.an.program.tables.keys().cloned().collect();
-    let runs = st.an.runs.len();
+    let runs = st.runs.out.len();
     let at = tables.iter().position(|t| *t == d.table).unwrap_or(0);
     let k = match ev {
         Event::Key(Key::Char('h'), _) => Key::Left,
@@ -517,7 +549,10 @@ pub fn run(st: State, raw: &str) -> State {
             let st = commit(st, &text::text(&ls), "added the fix — fill the hole");
             State { cursor: Pos { line: first, col: 0 }, ..st }
         }
-        "w" | "write" => st.say(format!("saved · {}", status(&an)), Tone::Ok),
+        "w" | "write" => {
+            let runs = format!("runs {}/{}", st.runs.passing(), st.runs.out.len());
+            st.say(format!("saved · {} · {runs}", status(&an)), Tone::Ok)
+        }
         "q" | "quit" => State { effect: Some(Effect::Quit), ..st },
         "extract" | "factor" => match &ids {
             Some(ids) => commit_or_say(st, ops::extract(&an, ids, &arg.to_lowercase()), &format!("extracted {}", arg.to_lowercase())),
@@ -553,7 +588,7 @@ pub fn run(st: State, raw: &str) -> State {
         "debug" | "run" => {
             let i = match arg.parse::<usize>() {
                 Ok(n) => n.wrapping_sub(1),
-                Err(_) => st.image.runs.iter().position(|r| r.verdict != crate::runs::Verdict::Pass).unwrap_or(0),
+                Err(_) => st.runs.out.iter().position(|r| r.verdict != crate::runs::Verdict::Pass).unwrap_or(0),
             };
             start_debug(st, i)
         }
@@ -701,6 +736,20 @@ pub mod tests {
     }
 
     #[test]
+    fn typing_runs_nothing_and_runs_land_only_on_their_own_text() {
+        let src = "route GET /x = w\nw = +{status: 200, json: 1}\nrun \"x\"\n  GET /x → 200 1\n";
+        let st = State::new(src);
+        assert_eq!((st.runs.passing(), st.runs.text == st.image.text), (1, true));
+        let old = Rc::new(Runs::of(&st.image));
+        let st = keys(st, "j$hxi2<esc>");
+        assert!(st.image.text.contains("json: 2") && st.runs.text != st.image.text, "the runs trail the image");
+        let st = update(st, Event::Ran(old));
+        assert!(st.runs.text != st.image.text, "an older text's runs are dropped");
+        let st = update(st.clone(), Event::Ran(Rc::new(Runs::of(&st.image))));
+        assert_eq!((st.runs.passing(), st.runs.text == st.image.text), (0, true));
+    }
+
+    #[test]
     fn the_debugger_steps_through_a_live_pages_events() {
         let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/counter.nag")).unwrap();
         let d = keys(State::new(&src), ":debug 1<cr>").debug.expect("recorded");
@@ -734,7 +783,7 @@ pub mod tests {
         let st = reply(st, "+{status: 200, json: 1}");
         assert!(st.agent.is_none());
         assert!(st.an.text.contains("w = +{status: 200, json: 1}"), "{}", st.an.text);
-        assert_eq!(st.an.passing(), 1);
+        assert_eq!(Runs::of(&st.image).passing(), 1);
     }
 
     #[test]

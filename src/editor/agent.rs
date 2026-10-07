@@ -1,7 +1,7 @@
-//! Handing a hole to Claude: what it's told, and how its fill is judged. A fill is kept when
+//! Handing a hole to the agent: what it's told, and how its fill is judged. A fill is kept when
 //! it parses, adds no checker error and breaks no run that worked before.
 use crate::editor::analysis::{Analysis, Step};
-use crate::editor::claude::Fill;
+use crate::editor::model::Fill;
 use crate::runs::Verdict;
 use std::rc::Rc;
 
@@ -57,7 +57,12 @@ pub fn judge(base: &Analysis, cand: &Analysis) -> Result<(), String> {
     Ok(())
 }
 
-/// What Claude is told about the hole.
+/// The question for the hole: the program as it is, the hole, and the prompt.
+pub fn question(an: &Analysis, hole: &Step, a: &Agent) -> crate::editor::model::Question {
+    crate::editor::model::Question { text: an.text.clone(), hole: hole.id, prompt: prompt(an, hole, a) }
+}
+
+/// What the agent is told about the hole.
 pub fn prompt(an: &Analysis, hole: &Step, a: &Agent) -> String {
     let numbered: Vec<String> = an.lines.iter().enumerate().map(|(i, l)| format!("{:>4}  {}", i + 1, l.iter().collect::<String>())).collect();
     let note = hole.hole().unwrap_or("").trim();

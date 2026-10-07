@@ -600,7 +600,7 @@ fn code_spans(st: &State, m: &Marks, ln: usize, a: usize, b: usize, line: &mut L
 }
 
 // ---------- the status bar ----------
-const HINT: &str = "i a o to write · esc · v V to select · :extract name :inline :hole :rework :drop :swap :rename name · :data · :debug n · :reset table · enter on a hole writes it, ga hands it to claude · u ⌃r · it’s live as soon as it parses";
+const HINT: &str = "i a o to write · esc · v V to select · :extract name :inline :hole :rework :drop :swap :rename name · :data · :debug n · :reset table · enter on a hole writes it, ga hands it to the agent · u ⌃r · it’s live as soon as it parses";
 
 fn upper(s: &str) -> String {
     s.to_uppercase()

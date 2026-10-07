@@ -1,7 +1,7 @@
 //! The editor: the program drawn on the GPU, edited live.
 mod agent;
 mod analysis;
-mod claude;
+mod model;
 mod debug;
 mod gpu;
 mod help;
@@ -22,9 +22,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{Key as WKey, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
-/// What other threads wake the editor with: Claude's answer to an agent.
+/// What other threads wake the editor with: the model's answer to an agent.
 enum Wake {
-    Reply(u64, Result<claude::Fill, String>),
+    Reply(u64, Result<model::Fill, String>),
     /// A request for the live server, answered on this thread with the editor's program.
     /// The live server answered a request: `GET /notes → 200`.
     Served(String),
@@ -103,12 +103,15 @@ impl App {
         if next.effect == Some(state::Effect::Quit) {
             self.quit = true;
         }
-        // a question for Claude goes out on its own thread; the answer comes back as a Wake
-        if let Some((id, prompt)) = next.ask.take() {
+        // a question for the model goes out on its own thread; the answer comes back as a Wake
+        if let Some((id, q)) = next.ask.take() {
             let proxy = self.proxy.clone();
-            std::thread::spawn(move || {
-                let _ = proxy.send_event(Wake::Reply(id, claude::ask(&prompt)));
-            });
+            std::thread::Builder::new()
+                .stack_size(64 << 20)
+                .spawn(move || {
+                    let _ = proxy.send_event(Wake::Reply(id, model::ask(&q)));
+                })
+                .ok();
         }
         if before.is_some_and(|b| b.text != next.image.text)
             && let Err(e) = std::fs::write(&self.path, &next.image.text)

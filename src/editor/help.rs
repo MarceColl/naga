@@ -42,6 +42,7 @@ Patterns look at the record:
   + - * / %   == != < > <= >=   and or not   ++
 ++ joins lists and text.
   r.f	a field
+  xs.f	on a list: each item's f, as a list
   r.{a b}	only those fields
   [a, b]   {a: 1, b: x}	a list, a record
   ^x   ^^x	x from the record one @focus out, two out
@@ -104,7 +105,7 @@ Normal:   h j k l   w b e   0 ^ $   gg G   12G      move
           i a I A o O        write              v V   select
           x dd yy cc D C p P   cut, copy, paste      u  ⌃R   undo, redo
           Tab Shift-Tab za zM zR   fold             [[ ]]   between headings
-          enter on a hole: write it                 ga on a hole: hand it to Claude
+          enter on a hole: write it                 ga on a hole: hand it to the agent
           ]e [e   next, previous error              ?   this sheet
 Commands: :extract name  :inline  :hole note  :rework  :drop  :swap  :rename name  :fix
           :data [table]  :debug n  :migrate  :reset table  :help  :w  :q

@@ -7,7 +7,7 @@ use crate::ast::Pos;
 use crate::check::Checker;
 use crate::editor::agent::{self, Agent};
 use crate::editor::analysis::{Analysis, Parent, Range, Step};
-use crate::editor::claude::Fill;
+use crate::editor::model::{Fill, Question};
 use crate::editor::debug::{self, Debug, Move};
 use crate::editor::ops;
 use crate::editor::text;
@@ -85,7 +85,7 @@ pub enum Event {
     Scroll(f32),
     /// How many code rows fit, and which program line each displayed row shows.
     Viewport(usize, Vec<usize>),
-    /// Claude's answer to the agent with this id.
+    /// The model's answer to the agent with this id.
     AgentReply(u64, Result<Fill, String>),
     /// Time passes: the agent types a little more of its fill.
     Tick,
@@ -164,8 +164,8 @@ pub struct State {
     /// The cheat sheet, scrolled to this line.
     pub help: Option<usize>,
     pub agent: Option<Agent>,
-    /// A question for Claude, waiting to be sent: the agent's id and the prompt.
-    pub ask: Option<(u64, String)>,
+    /// A question for the model, waiting to be sent, with the agent's id.
+    pub ask: Option<(u64, Question)>,
     pub agents: u64,
     /// The live server's port and the last request it answered.
     pub live: Option<(u16, Option<String>)>,
@@ -439,14 +439,14 @@ fn debugging(st: State, mut d: Debug, ev: Event) -> State {
 }
 
 // ---------- the agent ----------
-/// Hands the hole to Claude. `base` is what its fills are judged against; `original` is the
+/// Hands the hole to the agent. `base` is what its fills are judged against; `original` is the
 /// code a rework replaced.
 pub fn start_agent(st: State, hole: usize, label: &str, base: Rc<Analysis>, original: Option<String>) -> State {
     let Some(h) = st.an.step(hole).cloned() else { return st };
     let id = st.agents + 1;
     let a = Agent { id, hole, label: label.into(), tries: 0, fill: None, shown: 0, base, original, rejected: None };
-    let ask = Some((id, agent::prompt(&st.an, &h, &a)));
-    State { agent: Some(a), ask, agents: id, mode: Mode::Normal, hover: None, ..st }.say(format!("agent › {label} · try 1 · asking Claude · esc stops it"), Tone::Agent)
+    let ask = Some((id, agent::question(&st.an, &h, &a)));
+    State { agent: Some(a), ask, agents: id, mode: Mode::Normal, hover: None, ..st }.say(format!("agent › {label} · try 1 · asking DeepSeek · esc stops it"), Tone::Agent)
 }
 
 fn agent_event(st: State, mut a: Agent, ev: Event) -> State {
@@ -476,7 +476,7 @@ fn agent_event(st: State, mut a: Agent, ev: Event) -> State {
                 Err(why) if n < agent::TRIES => {
                     a.rejected = Some((fill, why.clone()));
                     a.fill = None;
-                    let ask = Some((a.id, agent::prompt(&st.an, &h, &a)));
+                    let ask = Some((a.id, agent::question(&st.an, &h, &a)));
                     State { agent: Some(a), ask, ..st }.say(format!("agent › {label} · try {n} ✗ {why} · asking again"), Tone::No)
                 }
                 Err(why) => give_up(st, a, &why),
@@ -805,10 +805,11 @@ pub mod tests {
     fn the_agent_retries_with_the_reason_and_keeps_a_fill_that_passes() {
         let src = "route GET /x = w\nw = ? answer one\nrun \"x\"\n  GET /x → 200 1\n";
         let mut st = keys(State::new(src), "j$ga");
-        let (id, prompt) = st.ask.take().expect("a question for Claude");
+        let (id, q) = st.ask.take().expect("a question for the model");
+        let prompt = q.prompt;
         assert!(prompt.contains("Fill the hole in `w` on line 2: `? answer one`."), "{prompt}");
         let st = reply(st, "+{status: 200, json: 2}");
-        let (id2, again) = st.ask.clone().expect("asks again");
+        let (id2, again) = st.ask.clone().map(|(i, q)| (i, q.prompt)).expect("asks again");
         assert_eq!(id2, id);
         assert!(again.contains("Your previous fill was rejected") && again.contains("run “x” answers 200 2"), "{again}");
         let st = reply(st, "+{status: 200, json: 1}");
@@ -822,9 +823,9 @@ pub mod tests {
         let src = "go = +{a: 1} -{a}\n";
         let mut st = keys(State::new(src), "wv$:rework<cr>");
         assert!(st.an.text.starts_with("go = ? +{a: 1} -{a}"), "{}", st.an.text);
-        assert!(st.ask.take().unwrap().1.contains("This is a rework: the hole replaced `+{a: 1} -{a}`"));
+        assert!(st.ask.take().unwrap().1.prompt.contains("This is a rework: the hole replaced `+{a: 1} -{a}`"));
         let id = st.agent.as_ref().unwrap().id;
-        let st = update(st, Event::AgentReply(id, Err("Claude answered 529: overloaded".into())));
+        let st = update(st, Event::AgentReply(id, Err("DeepSeek answered 503: busy".into())));
         assert_eq!(st.an.text, "go = +{a: 1} -{a}\n");
     }
 }

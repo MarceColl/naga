@@ -197,6 +197,104 @@ pub fn insert_lines(ls: &Lines, at: usize, s: &str) -> Lines {
     out
 }
 
+/// The `=` that starts a definition's body (or a route's word): the first one outside
+/// brackets and strings that isn't part of `==`, `<=`, `>=`, `!=` or `=>`.
+fn head_eq(l: &[char]) -> Option<usize> {
+    let (mut depth, mut in_str) = (0i32, false);
+    for (i, &c) in l.iter().enumerate() {
+        match c {
+            '"' => in_str = !in_str,
+            _ if in_str => {}
+            '{' | '[' | '(' => depth += 1,
+            '}' | ']' | ')' => depth -= 1,
+            '-' if l.get(i + 1) == Some(&'-') => return None,
+            '=' if depth == 0 => {
+                let before = i.checked_sub(1).map(|j| l[j]);
+                let after = l.get(i + 1).copied();
+                if !matches!(before, Some('=' | '<' | '>' | '!')) && !matches!(after, Some('=' | '>')) {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+pub fn head_eq_col(l: &[char]) -> Option<usize> {
+    head_eq(l)
+}
+
+/// What a line starts, for alignment: a definition (0) or a route (1).
+fn kind(l: &[char]) -> Option<u8> {
+    let first: String = l.iter().take_while(|c| !c.is_whitespace()).collect();
+    match first.to_lowercase().as_str() {
+        "route" => head_eq(l).map(|_| 1),
+        "table" | "seed" | "run" | "" => None,
+        w if w.starts_with(|c: char| c.is_alphabetic()) => head_eq(l).map(|_| 0),
+        _ => None,
+    }
+}
+
+/// Lines continuing the definition above them.
+fn continues(l: &[char]) -> bool {
+    l.first().is_some_and(|c| c.is_whitespace()) && l.iter().any(|c| !c.is_whitespace())
+}
+
+/// Lines up the `=` of the definitions (or routes) around `line` that have no blank line
+/// between them; lines continuing one move with it. Returns the lines and how far `line`'s
+/// text after its `=` moved.
+pub fn align(ls: &Lines, line: usize) -> (Lines, isize) {
+    let mut at = line;
+    while at > 1 && continues(&ls[at - 1]) {
+        at -= 1;
+    }
+    let Some(k) = ls.get(at - 1).and_then(|l| kind(l)) else { return (ls.clone(), 0) };
+    let part = |i: usize| kind(&ls[i - 1]) == Some(k) || continues(&ls[i - 1]);
+    let (mut a, mut b) = (at, at);
+    while a > 1 && part(a - 1) {
+        a -= 1;
+    }
+    while b < ls.len() && part(b + 1) {
+        b += 1;
+    }
+    let heads: Vec<usize> = (a..=b).filter(|&i| kind(&ls[i - 1]) == Some(k)).collect();
+    if heads.len() < 2 {
+        return (ls.clone(), 0);
+    }
+    let end_of_head = |i: usize| {
+        let l = &ls[i - 1];
+        let eq = head_eq(l).unwrap();
+        (eq, l[..eq].iter().rposition(|c| !c.is_whitespace()).map_or(0, |p| p + 1))
+    };
+    let target = heads.iter().map(|&i| end_of_head(i).1).max().unwrap_or(0) + 1;
+    let mut out = ls.clone();
+    let (mut shift, mut moved) = (0isize, 0isize);
+    for i in a..=b {
+        let l = &ls[i - 1];
+        if kind(l) == Some(k) {
+            let (eq, head) = end_of_head(i);
+            let mut new: Vec<char> = l[..head].to_vec();
+            new.resize(target, ' ');
+            new.extend(&l[eq..]);
+            shift = target as isize - eq as isize;
+            out[i - 1] = new;
+            if i == line {
+                moved = shift;
+            }
+        } else if shift != 0 {
+            // a continuation moves with its definition, keeping at least two spaces of indent
+            let indent = l.iter().take_while(|c| **c == ' ').count() as isize;
+            let to = (indent + shift).max(2) as usize;
+            out[i - 1] = std::iter::repeat_n(' ', to).chain(l[indent as usize..].iter().copied()).collect();
+            if i == line {
+                moved = to as isize - indent;
+            }
+        }
+    }
+    (out, moved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,6 +314,20 @@ mod tests {
         assert_eq!(go(&ls, p(1, 14), Motion::WordEnd, 0), p(1, 21));
         assert_eq!(go(&ls, p(1, 5), Motion::FirstNonBlank, 0), p(1, 0));
         assert_eq!(go(&ls, p(2, 9), Motion::FirstNonBlank, 0), p(2, 2));
+    }
+
+    #[test]
+    fn definitions_together_line_up_their_equals() {
+        let ls = lines("found {-missing} = +{status: 404}\nfound {note} = +{status: 200}\n  reply\n\nother = nop");
+        let (out, moved) = align(&ls, 2);
+        assert_eq!(text(&out), "found {-missing} = +{status: 404}\nfound {note}     = +{status: 200}\n      reply\n\nother = nop");
+        assert_eq!(moved, 4);
+        let ls = lines("go when n == 0 = say \"x\"\ngo = nop");
+        assert_eq!(text(&align(&ls, 1).0), "go when n == 0 = say \"x\"\ngo             = nop");
+        let ls = lines("route GET /a = w\nroute POST /accounts = v");
+        assert_eq!(text(&align(&ls, 1).0), "route GET /a         = w\nroute POST /accounts = v");
+        let ls = lines("a = nop\n\nbb = nop");
+        assert_eq!(text(&align(&ls, 1).0), "a = nop\n\nbb = nop", "a blank line keeps them apart");
     }
 
     #[test]

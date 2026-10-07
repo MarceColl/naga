@@ -60,6 +60,11 @@ fn insert(st: State, k: Key) -> State {
     let c = st.cursor;
     match k {
         Key::Escape => {
+            // leaving insert lines up the = of the definitions around (the cursor moves with its text)
+            let (ls, moved) = text::align(&st.an.lines, c.line);
+            let after_eq = text::head_eq_col(&st.an.lines[c.line - 1]).is_some_and(|eq| c.col > eq);
+            let c = Pos { col: (c.col as isize + if after_eq { moved } else { 0 }).max(0) as usize, ..c };
+            let st = if ls != st.an.lines { st.retext(&text::text(&ls), c) } else { st };
             let cursor = text::clamp(&st.an.lines, Pos { col: c.col.saturating_sub(1), ..c }, false);
             State { mode: Mode::Normal, cursor, goal: cursor.col, ..st }
         }
@@ -515,6 +520,13 @@ mod tests {
         assert_eq!((st.cursor.line, st.cursor.col), (3, 12));
         assert!(st.msg.as_ref().is_some_and(|m| m.0.contains("x")), "{:?}", st.msg);
         assert!(st.folds.is_empty() || st.folds.values().all(|f| *f == crate::editor::outline::Fold::Open), "the fold around it opens");
+    }
+
+    #[test]
+    fn leaving_insert_lines_up_the_definitions() {
+        let st = keys(State::new("found {-missing} = a\nfound {n} = b\n"), "jA c<esc>");
+        assert_eq!(text(&st), "found {-missing} = a\nfound {n}        = b c\n");
+        assert_eq!((st.cursor.line, st.cursor.col), (2, 21), "the cursor stays on what it typed");
     }
 
     #[test]

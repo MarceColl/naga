@@ -526,7 +526,9 @@ fn code_spans(st: &State, m: &Marks, ln: usize, a: usize, b: usize, line: &mut L
         } else if m.hover.is_some_and(|r| r.contains(ln, i)) && !is_hole && st.mode != Mode::Insert {
             style.bg = Some(HOVER);
         }
-        style.err = (sid != 0 && m.err_steps.contains(&sid)) || (in_def && m.err_lines.contains(&ln));
+        // an error with no step to hold it marks its line's head, or the whole line
+        let line_err = m.err_lines.contains(&ln) && (in_def || def.is_none() && ch != ' ');
+        style.err = (sid != 0 && m.err_steps.contains(&sid)) || line_err;
         line.push(&c.to_string(), style, target);
     }
 }
@@ -621,6 +623,22 @@ fn bar(st: &State, f: &mut Frame) {
     let def = an.def_at(c.line).filter(|d| c.col < d.name.chars().count()).map(|d| Target::Def(d.name.clone(), c.line));
     let target = st.hover.clone().or(def).or_else(|| st.step_at_cursor().map(|s| Target::Step(s.id)));
     f.shape = target.map(|t| shape(an, &t)).unwrap_or_default();
+    // errors on the cursor's line, whatever else it's on; otherwise, where the first one is
+    let here: Vec<&crate::editor::analysis::Error> = an.errors.iter().filter(|e| e.line == c.line).collect();
+    let mut shown: Vec<String> = f.shape.iter().map(|l| l.spans.iter().map(|s| s.text.as_str()).collect()).collect();
+    for e in here {
+        let text = upper(&e.msg);
+        if !shown.contains(&text) {
+            shown.push(text.clone());
+            f.shape.push(Line { spans: vec![Span { text, style: Style::plain(ERR), target: None }], src: 0, off: 0 });
+        }
+    }
+    if f.shape.is_empty() && let Some(e) = an.errors.first() {
+        let mut l = Line::default();
+        let more = if an.errors.len() > 1 { format!(" (and {} more)", an.errors.len() - 1) } else { String::new() };
+        l.push(&upper(&format!("line {}: {}{more} — ]e goes there", e.line, e.msg)), Style::plain(ERR), None);
+        f.shape.push(l);
+    }
     if f.shape.is_empty() && !st.pending.is_empty() {
         let mut l = Line::default();
         l.push(&upper(&format!("pending: {} — :reset the table to apply", st.pending.join(" · "))), Style::plain(ERR), None);

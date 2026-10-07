@@ -91,7 +91,7 @@ Normal:   h j k l   w b e   0 ^ $   gg G   12G      move
           x dd yy cc D C p P   cut, copy, paste      u  ⌃R   undo, redo
           Tab Shift-Tab za zM zR   fold             [[ ]]   between headings
           enter on a hole: write it                 ga on a hole: hand it to Claude
-          ?   this sheet
+          ]e [e   next, previous error              ?   this sheet
 Commands: :extract name  :inline  :hole note  :rework  :drop  :swap  :rename name
           :data [table]  :debug n  :reset table  :help  :w  :q
 They act on the selected steps, or the step under the cursor.

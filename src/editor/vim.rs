@@ -266,6 +266,24 @@ fn normal(st: State, k: Key, shift: bool) -> State {
         }),
         "zM" => fold(st, |an, _, _| outline::all(an, Fold::Folded)),
         "zR" => fold(st, |_, _, _| outline::Folds::new()),
+        "]e" | "[e" => {
+            // the next (or previous) error, wrapping, with the folds around it opened
+            let c = st.cursor;
+            let mut es: Vec<(usize, usize, String)> = st.an.errors.iter().map(|e| (e.line, e.col, e.msg.clone())).collect();
+            es.sort();
+            let after = |e: &&(usize, usize, String)| (e.0, e.1) > (c.line, c.col);
+            let to = match rest {
+                "]e" => es.iter().find(after).or(es.first()),
+                _ => es.iter().rev().find(|e| (e.0, e.1) < (c.line, c.col)).or(es.last()),
+            };
+            let Some((line, col, msg)) = to.cloned() else { return st.say("no errors", Tone::Ok) };
+            let folds: outline::Folds = st.folds.iter().filter(|(h, _)| {
+                let hs = outline::headings(&st.an);
+                hs.iter().position(|x| &x.text == *h).is_none_or(|i| !(hs[i].line < line && line <= outline::end(&st.an, &hs, i)))
+            }).map(|(h, f)| (h.clone(), *f)).collect();
+            let p = text::clamp(&st.an.lines, Pos { line, col }, false);
+            reveal(State { cursor: p, goal: p.col, folds: Rc::new(folds), ..st }).say(msg, Tone::No)
+        }
         "[[" | "]]" => {
             let line = st.cursor.line;
             let hs = outline::headings(&st.an);
@@ -486,6 +504,17 @@ mod tests {
         assert_eq!(st.cursor.line, 5);
         let st = tab(st, true);
         assert_eq!(st.cursor.line, 4, "overview");
+    }
+
+    #[test]
+    fn errors_are_one_jump_away_even_inside_folds() {
+        use crate::editor::state::{Event, Key, update};
+        let src = "* A\ngo = a\na = +{x: 1} +{x: 2}\n* B\nb = nop\n";
+        let st = update(State::new(src), Event::Key(Key::Tab, false));
+        let st = keys(st, "]e");
+        assert_eq!((st.cursor.line, st.cursor.col), (3, 12));
+        assert!(st.msg.as_ref().is_some_and(|m| m.0.contains("x")), "{:?}", st.msg);
+        assert!(st.folds.is_empty() || st.folds.values().all(|f| *f == crate::editor::outline::Fold::Open), "the fold around it opens");
     }
 
     #[test]

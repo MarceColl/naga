@@ -72,6 +72,8 @@ pub struct Error {
     pub line: usize,
     pub col: usize,
     pub msg: String,
+    /// What the checker can say beyond the title: the code it names, the paths, a fix.
+    pub detail: Option<std::rc::Rc<crate::check::Detail>>,
 }
 
 pub struct Analysis {
@@ -98,14 +100,14 @@ impl Analysis {
     pub fn with(text: &str, checker: &mut Checker) -> Analysis {
         let lines: Vec<Vec<char>> = text.split('\n').map(|l| l.chars().collect()).collect();
         let program = parse(text);
-        let mut errors: Vec<Error> = program.errors.iter().map(|e| Error { line: e.line, col: e.col, msg: e.msg.clone() }).collect();
+        let mut errors: Vec<Error> = program.errors.iter().map(|e| Error { line: e.line, col: e.col, msg: e.msg.clone(), detail: None }).collect();
         let (mut checked, mut runs) = (None, vec![]);
         if errors.is_empty() {
             let entry = program.words.contains_key("main").then(|| Name::from("main"));
             let c = checker.check(&program, entry.as_ref());
             for e in &c.errors {
                 if !errors.iter().any(|x| x.line == e.line && x.msg == e.msg) {
-                    errors.push(Error { line: e.line, col: e.col, msg: e.msg.clone() });
+                    errors.push(Error { line: e.line, col: e.col, msg: e.msg.clone(), detail: e.detail.clone() });
                 }
             }
             checked = Some(c);

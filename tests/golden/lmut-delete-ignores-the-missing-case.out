@@ -67,7 +67,7 @@ sql [243] SELECT * FROM "postings" WHERE ((("account-id" = 5) AND ("date" >= '20
 sql [248] SELECT * FROM "postings" WHERE ((("account-id" = 6) AND ("date" >= '2026-09-01')) AND ("date" < '2026-11-01')) ORDER BY "id"
 sql [253] SELECT * FROM "postings" WHERE ((("account-id" = 8) AND ("date" >= '2026-09-01')) AND ("date" < '2026-11-01')) ORDER BY "id"
 check 1 errors
-  ✗ 142:81 needs deleted — the record here is {id: Num, tx-id: Num, account-id: Num, amount: Num, date: Text, missing: Bool}
+  ✗ 142:81 when postings.delete finds no row, -{deleted} needs deleted
 sig main : {..r, ¬account, ¬id, ¬json, ¬missing, ¬status} → ✗ stops with an error (see Notes)
 sig show-reply : {..r, json, status} → {}
 sig reply : {..r, json, status} → {status, json}

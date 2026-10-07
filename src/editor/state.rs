@@ -152,7 +152,7 @@ pub struct State {
     pub row_lines: Rc<Vec<usize>>,
 }
 
-pub const OPS: [&str; 13] = ["extract name", "inline", "hole note", "rework", "drop", "swap", "rename name", "data", "debug 1–9", "reset table", "help", "w", "q"];
+pub const OPS: [&str; 14] = ["extract name", "inline", "hole note", "rework", "drop", "swap", "rename name", "fix", "data", "debug 1–9", "reset table", "help", "w", "q"];
 
 impl State {
     pub fn new(text: &str) -> State {
@@ -501,6 +501,19 @@ pub fn run(st: State, raw: &str) -> State {
     let need = |what: &str| format!("put the cursor on {what}, or select some");
     match op.as_str() {
         "help" | "h" => State { help: Some(0), ..st },
+        "fix" => {
+            // the fix an error on this line proposes: a clause, put before the word's first one,
+            // since the first clause that matches is the one that runs
+            let fix = an.errors.iter().filter(|e| e.line == st.cursor.line).find_map(|e| e.detail.as_ref()?.fix.clone());
+            let Some(fix) = fix else { return st.say("no fix to add on this line", Tone::No) };
+            let word = fix.split_whitespace().next().unwrap_or("").to_string();
+            let Some(first) = an.program.words.get(word.as_str()).and_then(|w| w.clauses.first()).map(|c| c.chunk_line) else {
+                return st.say(format!("{word} isn’t defined"), Tone::No);
+            };
+            let ls = text::insert_lines(&an.lines, first, &format!("{fix}\n"));
+            let st = commit(st, &text::text(&ls), "added the fix — fill the hole");
+            State { cursor: Pos { line: first, col: 0 }, ..st }
+        }
         "w" | "write" => st.say(format!("saved · {}", status(&an)), Tone::Ok),
         "q" | "quit" => State { effect: Some(Effect::Quit), ..st },
         "extract" | "factor" => match &ids {
@@ -632,6 +645,20 @@ pub mod tests {
         let text: Vec<String> = f.code.iter().map(|l| l.spans.iter().map(|s| s.text.as_str()).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")).collect();
         assert!(text.contains(&"1 5".to_string()) && text.contains(&"2 7".to_string()), "live rows, unmarked: {text:?}");
         assert_eq!(keys(st, "l").data.map(|d| d.rows), Some(Rows::Seed));
+    }
+
+    #[test]
+    fn an_explained_error_offers_its_fix_as_a_hole() {
+        let src = "table notes :: {title: Text}\nreply = .{status json}\ncomplete-note = notes.get complete\ncomplete = -{note}\n";
+        let st = State::new(src);
+        let e = st.an.errors.iter().find(|e| e.detail.is_some()).expect("an explained error");
+        assert_eq!(e.msg, "when notes.get finds no row, complete needs note");
+        let d = e.detail.as_ref().unwrap();
+        assert_eq!(d.refs.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["notes.get", "complete"]);
+        assert_eq!(d.fix.as_deref(), Some("complete {-missing} = ? when notes.get finds no row"));
+        let st = keys(st, "3G:fix<cr>");
+        assert!(st.an.text.ends_with("complete {-missing} = ? when notes.get finds no row\ncomplete = -{note}\n"), "{}", st.an.text);
+        assert!(st.an.errors.iter().all(|e| e.detail.is_none()), "the branch is handled now");
     }
 
     #[test]

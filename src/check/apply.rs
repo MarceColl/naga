@@ -438,7 +438,7 @@ impl Cx<'_> {
                 Some(word) => format!("{msg} (when called from {word})"),
                 None => msg.clone(),
             };
-            self.errors.push((Some(o), m));
+            self.errors.push((Some(o), m.into()));
         } else if let Some(p) = pos {
             self.err(p, msg.clone());
         }
@@ -473,7 +473,7 @@ impl Cx<'_> {
                             if let Some(fail) = &c.fail {
                                 if c.fail_reported {
                                     if let (Some(at), true) = (&c.fail_at, self.report_again) {
-                                        self.errors.push((Some(at.clone()), fail.clone()));
+                                        self.errors.push((Some(at.clone()), fail.clone().into()));
                                     }
                                     out.push(qw.failed(Fail { msg: fail.clone(), at: c.fail_at.clone(), reported: true }));
                                 } else {

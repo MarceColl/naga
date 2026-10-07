@@ -30,8 +30,10 @@ pub struct Cx<'a> {
     word: Option<Name>,
     ci: usize,
     chunk_line: usize,
-    errors: Vec<(Option<At>, String)>,
+    errors: Vec<(Option<At>, Diag)>,
     report_again: bool,
+    /// The statement being analysed, start and end.
+    span: Option<(At, At)>,
     /// Worlds seen around statements, waiting for the clause's shared preconditions.
     pending: Vec<(bool, At, World)>,
     points: IndexMap<(bool, At), Vec<Point>>,
@@ -44,7 +46,7 @@ impl Cx<'_> {
     }
     fn err(&mut self, pos: Pos, msg: String) {
         let at = self.at(pos);
-        self.errors.push((at, msg));
+        self.errors.push((at, msg.into()));
     }
     /// The live worlds just before (or after) a statement; only words record them.
     fn point(&mut self, after: bool, pos: Pos, ws: &[World]) {
@@ -77,11 +79,67 @@ pub struct Point {
     pub lifted: bool,
 }
 
+/// An error as the checker finds it: a title, and for the kinds that can say more, the code it
+/// points at and the paths that lead to it. Positions are relative to their clause, so a
+/// solved group's errors stay valid when it moves.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Diag {
+    pub title: String,
+    pub body: Option<std::rc::Rc<Explained>>,
+}
+
+impl From<String> for Diag {
+    fn from(title: String) -> Diag {
+        Diag { title, body: None }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Explained {
+    /// Code the message names: start, end, and the text there.
+    pub refs: Vec<(At, At, String)>,
+    pub lines: Vec<Vec<Part>>,
+    /// Code that would fix it.
+    pub fix: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Part {
+    Text(String),
+    /// The ref with this index, by its text.
+    Ref(usize),
+    /// A record's shape.
+    Shape(String),
+    /// This step takes it.
+    Ok,
+    /// This step fails on it.
+    No,
+}
+
+/// A ref placed in the program: lines from 1, columns from 0, end excluded.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Span {
+    pub line: usize,
+    pub col: usize,
+    pub end_line: usize,
+    pub end_col: usize,
+    pub text: String,
+}
+
+/// The explained part of an error, placed in the program.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Detail {
+    pub refs: Vec<Span>,
+    pub lines: Vec<Vec<Part>>,
+    pub fix: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Error {
     pub line: usize,
     pub col: usize,
     pub msg: String,
+    pub detail: Option<std::rc::Rc<Detail>>,
 }
 
 /// One case of a signature, as text.
@@ -111,7 +169,7 @@ pub struct Checked {
 struct Solved {
     sigs: HashMap<Name, Rc<Sig>>,
     /// Lines relative to each clause's chunk, so a solved group stays valid when it moves.
-    errors: Vec<(At, String)>,
+    errors: Vec<(At, Diag)>,
     points: IndexMap<(bool, At), Vec<Point>>,
 }
 
@@ -182,7 +240,7 @@ fn solve_group(p: &Program, comp: &[Name], sigs: &HashMap<Name, Rc<Sig>>) -> Sol
     let mut local: HashMap<Name, Rc<Sig>> = comp.iter().map(|n| (n.clone(), Rc::new(Sig::Bottom))).collect();
     let (mut errors, mut points) = (vec![], IndexMap::new());
     for _ in 0..25 {
-        let mut cx = Cx { p, sigs, local: local.clone(), here: None, word: None, ci: 0, chunk_line: 0, errors: vec![], report_again: true, pending: vec![], points: IndexMap::new() };
+        let mut cx = Cx { p, sigs, local: local.clone(), here: None, word: None, ci: 0, chunk_line: 0, errors: vec![], report_again: true, span: None, pending: vec![], points: IndexMap::new() };
         let mut next = vec![];
         let mut changed = false;
         for n in comp {
@@ -304,15 +362,21 @@ impl Checker {
         // relative positions → lines in the current text
         let abs = |at: &At| p.words[&at.word].clauses[at.ci].chunk_line + at.line - 1;
         let mut errors: Vec<Error> = vec![];
-        let mut push = |line: usize, col: usize, msg: String| {
+        let place = |d: &Diag| {
+            d.body.as_ref().map(|b| {
+                let refs = b.refs.iter().map(|(a, e, text)| Span { line: abs(a), col: a.col, end_line: abs(e), end_col: e.col, text: text.clone() }).collect();
+                Rc::new(Detail { refs, lines: b.lines.clone(), fix: b.fix.clone() })
+            })
+        };
+        let mut push = |line: usize, col: usize, msg: String, detail: Option<Rc<Detail>>| {
             if !errors.iter().any(|e| e.line == line && e.col == col && e.msg == msg) {
-                errors.push(Error { line, col, msg });
+                errors.push(Error { line, col, msg, detail });
             }
         };
         let (mut before, mut after) = (HashMap::new(), HashMap::new());
         for r in &results {
-            for (at, msg) in &r.errors {
-                push(abs(at), at.col, msg.clone());
+            for (at, d) in &r.errors {
+                push(abs(at), at.col, d.title.clone(), place(d));
             }
             for ((is_after, at), pts) in &r.points {
                 if p.words.contains_key(&at.word) {
@@ -322,29 +386,37 @@ impl Checker {
             }
         }
         for site in call_sites(p, entry) {
-            let mut top = Cx { p, sigs: &sigs, local: HashMap::new(), here: None, word: None, ci: 0, chunk_line: 0, errors: vec![], report_again: false, pending: vec![], points: IndexMap::new() };
+            let mut top = Cx { p, sigs: &sigs, local: HashMap::new(), here: None, word: None, ci: 0, chunk_line: 0, errors: vec![], report_again: false, span: None, pending: vec![], points: IndexMap::new() };
             let outs = top.apply_sig(World::new(site.input), sigs.get(site.word).cloned(), site.word, Pos { line: 1, col: 0 });
             // a route answers with whatever status and json its word leaves
             for w in outs.iter().filter(|w| site.reply && w.live()) {
                 for f in ["status", "json"] {
                     match world::lookup(w, &w.shape, f) {
                         world::Look::Present(..) => {}
-                        world::Look::Opt(_) => top.errors.push((None, format!("{} might finish without {f}", site.word))),
-                        _ => top.errors.push((None, format!("{} can finish without {f}", site.word))),
+                        world::Look::Opt(_) => top.errors.push((None, format!("{} might finish without {f}", site.word).into())),
+                        _ => top.errors.push((None, format!("{} can finish without {f}", site.word).into())),
                     }
                 }
             }
-            for (at, msg) in top.errors {
+            for (at, d) in top.errors {
+                let msg = d.title.clone();
                 match at.filter(|a| p.words.contains_key(&a.word)) {
                     Some(at) => {
                         let chained = msg.find(" (").is_some_and(|i| msg[i..].contains(" ← "));
                         let msg = if chained { format!("{msg}, when {} runs", site.label) } else { format!("{msg} (when {} runs)", site.label) };
-                        push(abs(&at), at.col, msg);
+                        push(abs(&at), at.col, msg, place(&d));
                     }
-                    None => push(site.line, 0, format!("{}: {msg}", site.unplaced)),
+                    None => push(site.line, 0, format!("{}: {msg}", site.unplaced), place(&d)),
                 }
             }
         }
+        // a failure explained once and reported again plainly (by a caller, or another pass)
+        // keeps the explanation
+        let explained: Vec<(usize, usize, String)> = errors.iter().filter(|e| e.detail.is_some()).map(|e| (e.line, e.col, e.msg.clone())).collect();
+        errors.retain(|e| {
+            let head = e.msg.split(" — ").next().unwrap_or(&e.msg);
+            e.detail.is_some() || !explained.iter().any(|(l, c, m)| (*l, *c) == (e.line, e.col) && m.contains(head))
+        });
         errors.sort_by_key(|e| (e.line, e.col));
         let signatures = sigs
             .iter()

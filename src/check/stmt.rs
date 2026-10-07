@@ -3,7 +3,7 @@ use super::expr::delta_changes_shape;
 use super::sig::*;
 use super::ty::*;
 use super::world::*;
-use super::Cx;
+use super::{Cx, Diag, Explained, Part};
 use crate::ast::*;
 use crate::num::js;
 use crate::value::Name;
@@ -107,15 +107,22 @@ impl Cx<'_> {
                 break;
             }
             self.point(false, st.pos, &cur);
+            self.span = self.at(st.pos).zip(self.at(st.end));
             let mut next = vec![];
+            let mut tried = vec![];
             for w in cur {
                 if !w.live() {
                     next.push(w);
                     continue;
                 }
                 self.here = self.at(st.pos);
-                next.extend(self.run_stmt(w, st));
+                let before = self.errors.len();
+                next.extend(self.run_stmt(w.clone(), st));
+                let errs: Vec<_> = self.errors.drain(before..).collect();
+                tried.push((w, errs));
             }
+            let merged = self.explain(st, tried);
+            self.errors.extend(merged);
             cur = widen(next)?;
             self.point(true, st.pos, &cur);
         }
@@ -427,7 +434,29 @@ impl Cx<'_> {
             constrain(w, &id, &Ty::Num, &format!("{table}.{op}: id")).map(|_| ())
         };
         let writes = |w: &mut World, ks: &[&Name]| ks.iter().for_each(|k| w.write(k));
-        let two = |w: &World, a: Shape, b: Shape| vec![w.with_shape(a), w.with_shape(b)];
+        // the two worlds a lookup leaves, each remembering which way it went
+        let span = self.span.clone();
+        let may = match op {
+            "get" => "may or may not find a row with that id",
+            "update" => "may or may not find the row to update",
+            _ => "may or may not find the row to delete",
+        };
+        let found = t.single.clone();
+        let first = match op {
+            "get" => ("finds a row", found),
+            "update" => ("finds the row", found),
+            _ => ("deletes it", "deleted".into()),
+        };
+        let branches = std::rc::Rc::new(vec![(first.0.to_string(), first.1), ("finds no row".to_string(), Name::from("missing"))]);
+        let two = |w: &World, a: Shape, b: Shape| {
+            let mark = |mut x: World, took: usize| {
+                if let Some((at, end)) = &span {
+                    x.trail.push(Split { at: at.clone(), end: end.clone(), what: format!("{table}.{op}"), may: may.into(), branches: branches.clone(), took });
+                }
+                x
+            };
+            vec![mark(w.with_shape(a), 0), mark(w.with_shape(b), 1)]
+        };
         let (missing, deleted, changes): (Name, Name, Name) = ("missing".into(), "deleted".into(), "changes".into());
         match op {
             "all" | "where" => {
@@ -494,6 +523,77 @@ impl Cx<'_> {
         }
     }
 
+    /// The errors a statement raised, world by world. Where worlds from one split fare
+    /// differently — some branches fail here, others don't — their errors become one that
+    /// shows every branch and how it fares.
+    fn explain(&self, st: &Stmt, tried: Vec<(World, Vec<Placed>)>) -> Vec<Placed> {
+        let here = self.at(st.pos);
+        let Some((at, end)) = here.clone().zip(self.at(st.end)) else { return tried.into_iter().flat_map(|t| t.1).collect() };
+        let at_here = |e: &Placed| e.0 == here;
+        // the latest split each world came through, and its errors at this statement
+        let mut groups: IndexMap<String, Vec<(&World, Vec<&Diag>)>> = IndexMap::new();
+        let mut out = vec![];
+        for (w, errs) in &tried {
+            match w.trail.last() {
+                Some(sp) => groups.entry(format!("{:?}{}", sp.at, sp.what)).or_default().push((w, errs.iter().filter(|e| at_here(e)).map(|e| &e.1).collect())),
+                None => out.extend(errs.iter().filter(|e| at_here(e)).cloned()),
+            }
+            out.extend(errs.iter().filter(|e| !at_here(e)).cloned());
+        }
+        for (_, ws) in groups {
+            let sp = ws[0].0.trail.last().unwrap().clone();
+            let failing: Vec<usize> = ws.iter().filter(|(_, e)| !e.is_empty()).map(|(w, _)| w.trail.last().unwrap().took).collect();
+            let fine = ws.iter().any(|(_, e)| e.is_empty());
+            let same: std::collections::HashSet<&str> = ws.iter().flat_map(|(_, e)| e.iter().map(|d| d.title.as_str())).collect();
+            // the split explains a failure when a branch fails needing a field another branch
+            // of it leaves: on this branch the record lacks what the other would have had
+            let needs = |d: &Diag| d.title.split(" — ").next().and_then(|h| h.split("needs ").nth(1)).map(|f| f.split(['.', ' ', ',', ':']).next().unwrap_or("").to_string());
+            let explains = ws.iter().any(|(w, e)| {
+                let took = w.trail.last().unwrap().took;
+                e.iter().filter_map(|d| needs(d)).any(|f| sp.branches.iter().enumerate().any(|(j, b)| j != took && *b.1 == *f))
+            });
+            if failing.is_empty() || !explains || !fine && same.len() <= 1 {
+                out.extend(ws.iter().flat_map(|(_, e)| e.iter().map(|d| (here.clone(), (*d).clone()))));
+                continue;
+            }
+            let step: String = st_text(self, st);
+            let reason = |d: &Diag| {
+                let head = d.title.split(" — ").next().unwrap_or(&d.title);
+                head.strip_prefix(&format!("{step} ")).unwrap_or(head).to_string()
+            };
+            let refs = vec![(sp.at.clone(), sp.end.clone(), sp.what.clone()), (at.clone(), end.clone(), step.clone())];
+            let mut lines = vec![vec![Part::Ref(0), Part::Text(format!(" {}:", sp.may))]];
+            let width = sp.branches.iter().map(|b| b.0.chars().count()).max().unwrap_or(0);
+            let mut first_no = None;
+            for (i, (label, _)) in sp.branches.iter().enumerate() {
+                let Some((w, errs)) = ws.iter().find(|(w, _)| w.trail.last().unwrap().took == i) else { continue };
+                let mut line = vec![Part::Text(format!("   {label:width$}  ")), Part::Shape(fmt_w(Some(w), &w.shape, 0)), Part::Text("  → ".into()), Part::Ref(1)];
+                match errs.first() {
+                    None => line.extend([Part::Text(" takes it ".into()), Part::Ok]),
+                    Some(d) => {
+                        first_no.get_or_insert((i, reason(d)));
+                        line.extend([Part::Text(format!(" {} ", reason(d))), Part::No]);
+                    }
+                }
+                lines.push(line);
+            }
+            let (i, why) = first_no.unwrap_or((failing[0], String::new()));
+            let (label, field) = sp.branches[i].clone();
+            // a word that has no clause for this branch's field can be given one, as a hole
+            let fix = match &st.kind {
+                StmtKind::Call(name) => {
+                    lines.push(vec![Part::Ref(1), Part::Text(" has no clause for that. Add one:".to_string())]);
+                    Some(format!("{name} {{-{field}}} = ? when {} {label}", sp.what))
+                }
+                _ => None,
+            };
+            let title = format!("when {} {label}, {step} {why}", sp.what);
+            let body = Some(std::rc::Rc::new(Explained { refs, lines, fix }));
+            out.push((here.clone(), Diag { title, body }));
+        }
+        out
+    }
+
     pub fn analyze_word(&mut self, w: &Word) -> Sig {
         let mut groups = vec![];
         for (ci, c) in w.clauses.iter().enumerate() {
@@ -532,5 +632,23 @@ impl Cx<'_> {
             groups.push(group);
         }
         Sig::Groups(groups)
+    }
+}
+
+/// An error and where it is (nowhere, at the top level).
+type Placed = (Option<At>, Diag);
+
+/// A statement as written: `complete`, `notes.get`.
+fn st_text(cx: &Cx, st: &Stmt) -> String {
+    match &st.kind {
+        StmtKind::Call(n) => n.to_string(),
+        StmtKind::Table { table, op, .. } => format!("{table}.{op}"),
+        _ => {
+            let lines = &cx.p.lines;
+            match lines.get(st.pos.line - 1) {
+                Some(l) if st.end.line == st.pos.line => l.chars().skip(st.pos.col).take(st.end.col - st.pos.col).collect(),
+                _ => st.kind_name().to_string(),
+            }
+        }
     }
 }

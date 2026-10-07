@@ -60,3 +60,52 @@ pub fn report(src: &str) -> String {
     out.push(String::new());
     out.join("\n")
 }
+
+/// The checker's errors that can say more, written out in full: each with the code it names
+/// (marked underneath), the paths that lead to it, and a fix when there is one.
+pub fn explain(src: &str) -> String {
+    use crate::check::Part;
+    let p = parse(src);
+    if !p.errors.is_empty() {
+        return String::new();
+    }
+    let lines: Vec<&str> = src.split('\n').collect();
+    let entry = p.words.contains_key("main").then(|| crate::value::Name::from("main"));
+    let r = Checker::default().check(&p, entry.as_ref());
+    let mut out = String::new();
+    for e in &r.errors {
+        let Some(d) = &e.detail else { continue };
+        out += &format!("\n── {} {}\n\n", e.msg.to_uppercase(), "─".repeat(60usize.saturating_sub(e.msg.chars().count())));
+        // each line the refs are on, with ^ under them
+        let mut shown: Vec<usize> = d.refs.iter().map(|s| s.line).collect();
+        shown.sort();
+        shown.dedup();
+        for l in shown {
+            out += &format!("{l:>5} │ {}\n", lines.get(l - 1).unwrap_or(&""));
+            let mut marks = vec![' '; lines.get(l - 1).map_or(0, |x| x.chars().count()) + 1];
+            for s in d.refs.iter().filter(|s| s.line == l) {
+                let end = if s.end_line == l { s.end_col } else { marks.len() - 1 };
+                let n = marks.len();
+                marks[s.col.min(n)..end.min(n)].iter_mut().for_each(|m| *m = '^');
+            }
+            out += &format!("      │ {}\n", marks.iter().collect::<String>().trim_end());
+        }
+        out += "\n";
+        for line in &d.lines {
+            let text: String = line
+                .iter()
+                .map(|part| match part {
+                    Part::Text(t) | Part::Shape(t) => t.clone(),
+                    Part::Ref(i) => d.refs.get(*i).map_or(String::new(), |s| s.text.clone()),
+                    Part::Ok => "✓".into(),
+                    Part::No => "✗".into(),
+                })
+                .collect();
+            out += &format!("  {text}\n");
+        }
+        if let Some(f) = &d.fix {
+            out += &format!("\n      {f}\n");
+        }
+    }
+    out
+}

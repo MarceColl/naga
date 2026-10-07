@@ -31,6 +31,8 @@ pub mod palette {
     pub const ERR: Color = [0xFF, 0x3B, 0x30];
     pub const HOVER: Color = [0x16, 0x16, 0x16];
     pub const RULE: Color = [0x1C, 0x1C, 0x1C];
+    /// Behind code an error names, and its chip in the message: amber, blue, magenta, green.
+    pub const REFS: [Color; 4] = [[0x4A, 0x36, 0x00], [0x0E, 0x34, 0x5A], [0x4A, 0x14, 0x4A], [0x10, 0x40, 0x28]];
 }
 use palette::*;
 
@@ -243,6 +245,8 @@ struct Marks {
     hover: Option<Range>,
     err_steps: Vec<usize>,
     err_lines: Vec<usize>,
+    /// Code named by the error the cursor is on, each in its colour.
+    refs: Vec<(Range, Color)>,
 }
 
 
@@ -269,7 +273,14 @@ pub fn view(st: &State) -> Frame {
         _ => None,
     };
     let cur = st.debug.as_ref().and_then(Debug::current);
-    let marks = Marks { sel, cur, hover, err_steps, err_lines };
+    // the error on the cursor's line names some code; it gets its colours
+    let open: Vec<&crate::editor::analysis::Error> = if st.debug.is_none() { an.errors.iter().filter(|e| e.line == st.cursor.line).collect() } else { vec![] };
+    let refs = open
+        .iter()
+        .filter_map(|e| e.detail.as_ref())
+        .flat_map(|d| d.refs.iter().enumerate().map(|(i, r)| (Range { pos: crate::ast::Pos { line: r.line, col: r.col }, end: crate::ast::Pos { line: r.end_line, col: r.end_col } }, REFS[i % REFS.len()])))
+        .collect();
+    let marks = Marks { sel, cur, hover, err_steps, err_lines, refs };
     let mut code = vec![];
     let mut caret = None;
     let mut folding = false;
@@ -322,6 +333,13 @@ pub fn view(st: &State) -> Frame {
             line.push(" ", Style { fg: BG, bg: Some(FG), ..Style::plain(FG) }, None);
         }
         code.push(gutter(st, ln, line));
+        // its errors, under it: open on the cursor's line, a title elsewhere
+        if st.debug.is_none() {
+            let indent = chars.iter().take_while(|c| **c == ' ').count() + 2;
+            for e in an.errors.iter().filter(|e| e.line == ln) {
+                code.extend(error_rows(e, indent, ln == st.cursor.line));
+            }
+        }
     }
     let mut f = Frame { code, caret, ..Frame::default() };
     match &st.debug {
@@ -329,6 +347,45 @@ pub fn view(st: &State) -> Frame {
         None => bar(st, &mut f),
     }
     f
+}
+
+/// An error under its line: `✗ title`, and when open, what it explains and how to fix it.
+fn error_rows(e: &crate::editor::analysis::Error, indent: usize, open: bool) -> Vec<Line> {
+    use crate::check::Part;
+    let pad = " ".repeat(indent);
+    let row = |spans: Vec<Span>| Line { spans, src: 0, off: 0 };
+    let plain = |t: &str, c: Color| Span { text: t.to_string(), style: Style::plain(c), target: None };
+    let mut rows = vec![row(vec![plain(&pad, DIM), Span { text: format!("✗ {}", upper(&e.msg)), style: Style::bold(ERR, 700), target: None }])];
+    let Some(d) = e.detail.as_ref().filter(|_| open) else { return rows };
+    for parts in &d.lines {
+        let mut spans = vec![plain(&format!("{pad}  "), DIM)];
+        for p in parts {
+            spans.push(match p {
+                Part::Text(t) => plain(&upper(t), FG),
+                Part::Shape(t) => plain(&upper(t), DIM),
+                Part::Ref(i) => {
+                    let text = d.refs.get(*i).map_or(String::new(), |r| upper(&r.text));
+                    Span { text: format!(" {text} "), style: Style { fg: FG, bg: Some(REFS[i % REFS.len()]), weight: 700, err: false }, target: None }
+                }
+                Part::Ok => plain("✓", CALL),
+                Part::No => plain("✗", ERR),
+            });
+        }
+        rows.push(row(spans));
+    }
+    if let Some(fix) = &d.fix {
+        let chars: Vec<char> = fix.chars().collect();
+        let mut line = Line::default();
+        line.push(&format!("{pad}    "), Style::plain(DIM), None);
+        let hole = chars.iter().position(|c| *c == '?').unwrap_or(chars.len());
+        for (i, (c, k)) in chars.iter().zip(classes(&chars)).enumerate() {
+            let style = if i >= hole { Style { fg: HOLE_FG, bg: Some(HOLE), weight: 700, err: false } } else { class_style(k) };
+            line.push(&c.to_uppercase().next().unwrap_or(*c).to_string(), style, None);
+        }
+        line.push("   :FIX ADDS IT", Style::plain(FAINT), None);
+        rows.push(line);
+    }
+    rows
 }
 
 /// While debugging, every line starts with a breakpoint ● or the current step's ▸.
@@ -522,6 +579,9 @@ fn code_spans(st: &State, m: &Marks, ln: usize, a: usize, b: usize, line: &mut L
         if m.cur.is_some_and(|r| r.contains(ln, i)) && !is_hole {
             style = Style { fg: BG, bg: Some(DEF), ..style };
         }
+        if let Some((_, c)) = m.refs.iter().find(|(r, _)| r.contains(ln, i)) {
+            style.bg = Some(*c);
+        }
         let block = st.cursor == (crate::ast::Pos { line: ln, col: i }) && st.mode != Mode::Insert && st.debug.is_none() && st.data.is_none();
         let selected = m.sel.is_some_and(|r| r.contains(ln, i)) || block;
         if selected {
@@ -626,17 +686,8 @@ fn bar(st: &State, f: &mut Frame) {
     let def = an.def_at(c.line).filter(|d| c.col < d.name.chars().count()).map(|d| Target::Def(d.name.clone(), c.line));
     let target = st.hover.clone().or(def).or_else(|| st.step_at_cursor().map(|s| Target::Step(s.id)));
     f.shape = target.map(|t| shape(an, &t)).unwrap_or_default();
-    // errors on the cursor's line, whatever else it's on; otherwise, where the first one is
-    let here: Vec<&crate::editor::analysis::Error> = an.errors.iter().filter(|e| e.line == c.line).collect();
-    let mut shown: Vec<String> = f.shape.iter().map(|l| l.spans.iter().map(|s| s.text.as_str()).collect()).collect();
-    for e in here {
-        let text = upper(&e.msg);
-        if !shown.contains(&text) {
-            shown.push(text.clone());
-            f.shape.push(Line { spans: vec![Span { text, style: Style::plain(ERR), target: None }], src: 0, off: 0 });
-        }
-    }
-    if f.shape.is_empty() && let Some(e) = an.errors.first() {
+    // with nothing else to say, where the first error is
+    if f.shape.is_empty() && let Some(e) = an.errors.first().filter(|e| e.line != c.line) {
         let mut l = Line::default();
         let more = if an.errors.len() > 1 { format!(" (and {} more)", an.errors.len() - 1) } else { String::new() };
         l.push(&upper(&format!("line {}: {}{more} — ]e goes there", e.line, e.msg)), Style::plain(ERR), None);

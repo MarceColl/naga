@@ -60,7 +60,13 @@ fn main() -> ExitCode {
         ["start", "--port", ..] => port(&a[1..], 4170).and_then(|p| naga::editor::start("app.nag", p)),
         ["start", file, rest @ ..] => port(rest, 4170).and_then(|p| naga::editor::start(file, p)),
         ["edit", file, rest @ ..] => naga::editor::edit(file, &args[2..2 + rest.len()]),
-        ["run", file] => read(file).map(|src| print!("{}", naga::report::report(&src))),
+        ["run", file] => read(file).map(|src| {
+            print!("{}", naga::report::report(&src));
+            // at a terminal, the errors that can say more say it
+            if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+                print!("{}", naga::report::explain(&src));
+            }
+        }),
         ["serve", file, rest @ ..] => port(rest, 4170).and_then(|p| serve(file, p)),
         _ => Err(USAGE.into()),
     };

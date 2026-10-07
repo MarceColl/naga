@@ -94,9 +94,25 @@ pub struct Fail {
     pub reported: bool,
 }
 
+/// A place where a world's path forked: what forked it, its branches (a label and the field
+/// each leaves), and which one this world took.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Split {
+    pub at: At,
+    pub end: At,
+    /// `notes.get`
+    pub what: String,
+    /// `may or may not find a row with that id`
+    pub may: String,
+    pub branches: std::rc::Rc<Vec<(String, Name)>>,
+    pub took: usize,
+}
+
 #[derive(Clone, Debug)]
 pub struct World {
     pub shape: Shape,
+    /// The splits that made this world, oldest first.
+    pub trail: Vec<Split>,
     pub facts: IndexMap<Key, Fact>,
     pub writes: IndexSet<Name>,
     pub lifted: bool,
@@ -108,7 +124,7 @@ pub struct World {
 
 impl World {
     pub fn new(shape: Shape) -> World {
-        World { shape, facts: IndexMap::new(), writes: IndexSet::new(), lifted: false, fail: None, diverge: false, outer: vec![], guard_mode: false }
+        World { shape, trail: vec![], facts: IndexMap::new(), writes: IndexSet::new(), lifted: false, fail: None, diverge: false, outer: vec![], guard_mode: false }
     }
     pub fn with_shape(&self, shape: Shape) -> World {
         World { shape, ..self.clone() }

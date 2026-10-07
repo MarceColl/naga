@@ -2,13 +2,13 @@
 use crate::ast::*;
 use crate::num;
 use crate::value::*;
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub struct Env<'a> {
     pub subj: &'a Rec,
     pub now: f64,
     /// Enclosing records, innermost first.
-    pub outer: &'a [Rc<Rec>],
+    pub outer: &'a [Arc<Rec>],
 }
 
 fn number(v: &Value, what: &str) -> Result<f64, RunError> {
@@ -18,7 +18,7 @@ fn number(v: &Value, what: &str) -> Result<f64, RunError> {
     }
 }
 
-fn items<'a>(v: &'a Value, what: &str) -> Result<&'a Rc<Vec<Value>>, RunError> {
+fn items<'a>(v: &'a Value, what: &str) -> Result<&'a Arc<Vec<Value>>, RunError> {
     match v {
         Value::List(xs) => Ok(xs),
         v => fail(format!("{what} needs a list, got {}", v.described())),

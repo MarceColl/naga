@@ -4,7 +4,7 @@ use crate::ast::*;
 use crate::num::slice16;
 use crate::store::compile_where;
 use crate::value::{Name, Value, list};
-use std::rc::Rc;
+use std::sync::Arc;
 use unicode_general_category::{GeneralCategory as G, get_general_category};
 
 pub const KEYWORDS: [&str; 15] = ["when", "say", "show", "raise", "break", "nop", "true", "false", "nil", "now", "and", "or", "not", "wrap", "unwrap"];
@@ -634,7 +634,7 @@ fn body(ts: &mut Ts, closer: Option<&str>) -> R<Vec<Stmt>> {
             return ts.err("‖ needs steps on both sides", None);
         }
         let pos = ts.pos(start.as_ref().unwrap());
-        return Ok(vec![Stmt { kind: StmtKind::Par(branches.into_iter().map(Rc::from).collect()), pos, end: ts.end() }]);
+        return Ok(vec![Stmt { kind: StmtKind::Par(branches.into_iter().map(Arc::from).collect()), pos, end: ts.end() }]);
     }
     Ok(branches.pop().unwrap())
 }

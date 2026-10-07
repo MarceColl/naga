@@ -1,9 +1,9 @@
 //! Runtime values, how they print, and the record algebra (∆ ⍎ ⊔ ⊓ ⊑ .{}).
 use crate::num;
 use indexmap::IndexMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
-pub type Name = Rc<str>;
+pub type Name = Arc<str>;
 /// Records keep insertion order; output order depends on it.
 pub type Rec = IndexMap<Name, Value>;
 
@@ -12,10 +12,10 @@ pub enum Value {
     Nil,
     Bool(bool),
     Num(f64),
-    Text(Rc<str>),
+    Text(Arc<str>),
     Const(Name),
-    List(Rc<Vec<Value>>),
-    Rec(Rc<Rec>),
+    List(Arc<Vec<Value>>),
+    Rec(Arc<Rec>),
 }
 
 #[derive(Debug, Clone)]
@@ -29,11 +29,11 @@ pub fn fail<T>(msg: impl Into<String>) -> Result<T, RunError> {
 }
 
 pub fn list(items: Vec<Value>) -> Value {
-    Value::List(Rc::new(items))
+    Value::List(Arc::new(items))
 }
 
 pub fn rec(r: Rec) -> Value {
-    Value::Rec(Rc::new(r))
+    Value::Rec(Arc::new(r))
 }
 
 pub fn rec1(k: &str, v: Value) -> Rec {
@@ -77,7 +77,7 @@ impl Value {
         !matches!(self, Value::Nil | Value::Bool(false))
     }
 
-    pub fn as_rec(&self) -> Option<&Rc<Rec>> {
+    pub fn as_rec(&self) -> Option<&Arc<Rec>> {
         if let Value::Rec(r) = self { Some(r) } else { None }
     }
 

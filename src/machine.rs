@@ -4,17 +4,17 @@ use crate::ast::*;
 use crate::eval::{Env, eval};
 use crate::store::Store;
 use crate::value::*;
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub enum Frame {
     Seq { body: Body, i: usize, lvl: usize },
     /// `@field( … )` on a record.
-    Focus { field: Name, saved: Rc<Rec>, lvl: usize },
+    Focus { field: Name, saved: Arc<Rec>, lvl: usize },
     /// `@field( … )` on a list: the body runs once per item.
-    Map { field: Name, saved: Rc<Rec>, items: Rc<Vec<Value>>, results: Vec<Value>, body: Body, lvl: usize },
+    Map { field: Name, saved: Arc<Rec>, items: Arc<Vec<Value>>, results: Vec<Value>, body: Body, lvl: usize },
     /// `( a ‖ b )`: each branch runs on `base`, then their changes merge.
-    Par { base: Rc<Rec>, branches: Vec<Body>, results: Vec<Rc<Rec>>, lvl: usize },
+    Par { base: Arc<Rec>, branches: Vec<Body>, results: Vec<Arc<Rec>>, lvl: usize },
 }
 
 impl Frame {
@@ -53,7 +53,7 @@ pub struct Failure {
 
 #[derive(Clone, Debug)]
 pub struct State {
-    pub subj: Rc<Rec>,
+    pub subj: Arc<Rec>,
     pub k: Vec<Frame>,
     pub tick: usize,
     /// How much of the session's output this state has produced.
@@ -91,7 +91,7 @@ impl State {
     }
 }
 
-fn outer_chain(k: &[Frame]) -> Vec<Rc<Rec>> {
+fn outer_chain(k: &[Frame]) -> Vec<Arc<Rec>> {
     k.iter()
         .rev()
         .filter_map(|f| match f {
@@ -101,17 +101,17 @@ fn outer_chain(k: &[Frame]) -> Vec<Rc<Rec>> {
         .collect()
 }
 
-fn wrap_item(x: &Value) -> Rc<Rec> {
+fn wrap_item(x: &Value) -> Arc<Rec> {
     match x {
         Value::Rec(r) => r.clone(),
-        x => Rc::new(rec1("it", x.clone())),
+        x => Arc::new(rec1("it", x.clone())),
     }
 }
 
-fn with(r: &Rec, k: &Name, v: Value) -> Rc<Rec> {
+fn with(r: &Rec, k: &Name, v: Value) -> Arc<Rec> {
     let mut n = r.clone();
     n.insert(k.clone(), v);
-    Rc::new(n)
+    Arc::new(n)
 }
 
 // ---------- clause selection ----------
@@ -170,7 +170,7 @@ pub fn select<'a>(w: &'a Word, env: &Env) -> Result<(&'a Clause, Vec<Name>), Vec
 
 // ---------- stepping ----------
 /// Pops finished frames: closes focuses, moves maps and branches to their next item.
-fn settle(mut k: Vec<Frame>, mut subj: Rc<Rec>) -> Result<(Vec<Frame>, Rc<Rec>), RunError> {
+fn settle(mut k: Vec<Frame>, mut subj: Arc<Rec>) -> Result<(Vec<Frame>, Arc<Rec>), RunError> {
     while let Some(top) = k.pop() {
         match top {
             Frame::Seq { ref body, i, .. } if i < body.len() => {
@@ -213,7 +213,7 @@ fn settle(mut k: Vec<Frame>, mut subj: Rc<Rec>) -> Result<(Vec<Frame>, Rc<Rec>),
     Ok((k, subj))
 }
 
-fn merge_branches(base: &Rec, results: &[Rc<Rec>]) -> Result<Rc<Rec>, RunError> {
+fn merge_branches(base: &Rec, results: &[Arc<Rec>]) -> Result<Arc<Rec>, RunError> {
     // field → (branch, new value or None for deleted)
     let mut changes: indexmap::IndexMap<Name, (usize, Option<Value>)> = Default::default();
     let mut note = |key: &Name, bi: usize, v: Option<Value>| -> Result<(), RunError> {
@@ -247,7 +247,7 @@ fn merge_branches(base: &Rec, results: &[Rc<Rec>]) -> Result<Rc<Rec>, RunError> 
             }
         }
     }
-    Ok(Rc::new(out))
+    Ok(Arc::new(out))
 }
 
 pub struct Runtime<'a> {
@@ -256,12 +256,12 @@ pub struct Runtime<'a> {
     pub store_error: Option<&'a str>,
 }
 
-pub fn initial(p: &Program, entry: &Name, subj: Rc<Rec>) -> State {
+pub fn initial(p: &Program, entry: &Name, subj: Arc<Rec>) -> State {
     let line = p.words.get(entry).map_or(0, |w| w.line);
     let call = Stmt { kind: StmtKind::Call(entry.clone()), pos: Pos { line, col: 0 }, end: Pos { line, col: entry.encode_utf16().count() } };
     State {
         subj,
-        k: vec![Frame::Seq { body: Rc::from(vec![call]), i: 0, lvl: 0 }],
+        k: vec![Frame::Seq { body: Arc::from(vec![call]), i: 0, lvl: 0 }],
         tick: 0,
         out_len: 0,
         status: Status::Ready,
@@ -294,7 +294,7 @@ pub fn step(p: &Program, s: &State, rt: &mut Runtime) -> State {
     }
 }
 
-fn exec(p: &Program, s: &State, stmt: &Stmt, mut k: Vec<Frame>, lvl: usize, rt: &mut Runtime) -> Result<(Vec<Frame>, Rc<Rec>, bool), RunError> {
+fn exec(p: &Program, s: &State, stmt: &Stmt, mut k: Vec<Frame>, lvl: usize, rt: &mut Runtime) -> Result<(Vec<Frame>, Arc<Rec>, bool), RunError> {
     let outer = outer_chain(&s.k);
     let env = Env { subj: &s.subj, now: s.tick as f64, outer: &outer };
     let mut subj = s.subj.clone();
@@ -310,7 +310,7 @@ fn exec(p: &Program, s: &State, stmt: &Stmt, mut k: Vec<Frame>, lvl: usize, rt: 
                 take.iter().for_each(|t| {
                     n.shift_remove(t);
                 });
-                subj = Rc::new(n);
+                subj = Arc::new(n);
             }
             k.push(Frame::Seq { body: c.body.clone(), i: 0, lvl });
         }
@@ -322,7 +322,7 @@ fn exec(p: &Program, s: &State, stmt: &Stmt, mut k: Vec<Frame>, lvl: usize, rt: 
                 }
                 n.insert(f.name.clone(), value_of(f)?);
             }
-            subj = Rc::new(n);
+            subj = Arc::new(n);
         }
         StmtKind::Del(names) => {
             let mut n = (*subj).clone();
@@ -331,13 +331,13 @@ fn exec(p: &Program, s: &State, stmt: &Stmt, mut k: Vec<Frame>, lvl: usize, rt: 
                     return fail(format!("needs field {f}"));
                 }
             }
-            subj = Rc::new(n);
+            subj = Arc::new(n);
         }
         StmtKind::Pick(names) => {
             for n in names {
                 need(&subj, n)?;
             }
-            subj = Rc::new(subj.iter().filter(|(k, _)| names.contains(k)).map(|(k, v)| (k.clone(), v.clone())).collect());
+            subj = Arc::new(subj.iter().filter(|(k, _)| names.contains(k)).map(|(k, v)| (k.clone(), v.clone())).collect());
         }
         StmtKind::Set(name, e) => {
             need(&subj, name)?;
@@ -348,7 +348,7 @@ fn exec(p: &Program, s: &State, stmt: &Stmt, mut k: Vec<Frame>, lvl: usize, rt: 
             if subj.contains_key(to) {
                 return fail(format!("{to} is already there — {from}→{to} won't overwrite it"));
             }
-            subj = Rc::new(subj.iter().map(|(k, v)| (if k == from { to.clone() } else { k.clone() }, v.clone())).collect());
+            subj = Arc::new(subj.iter().map(|(k, v)| (if k == from { to.clone() } else { k.clone() }, v.clone())).collect());
         }
         StmtKind::Wrap(field, names) => {
             if subj.contains_key(field) {
@@ -359,7 +359,7 @@ fn exec(p: &Program, s: &State, stmt: &Stmt, mut k: Vec<Frame>, lvl: usize, rt: 
             }
             let mut n: Rec = subj.iter().filter(|(k, _)| !names.contains(k)).map(|(k, v)| (k.clone(), v.clone())).collect();
             n.insert(field.clone(), rec(names.iter().map(|x| (x.clone(), subj[x].clone())).collect()));
-            subj = Rc::new(n);
+            subj = Arc::new(n);
         }
         StmtKind::Unwrap(field) => {
             need(&subj, field)?;
@@ -374,14 +374,14 @@ fn exec(p: &Program, s: &State, stmt: &Stmt, mut k: Vec<Frame>, lvl: usize, rt: 
                 }
                 n.insert(key.clone(), v.clone());
             }
-            subj = Rc::new(n);
+            subj = Arc::new(n);
         }
         StmtKind::Over(fs) => {
             let mut n = (*subj).clone();
             for f in fs {
                 n.insert(f.name.clone(), value_of(f)?);
             }
-            subj = Rc::new(n);
+            subj = Arc::new(n);
         }
         StmtKind::Unify(fs) => {
             if subj.contains_key("conflict") {
@@ -389,7 +389,7 @@ fn exec(p: &Program, s: &State, stmt: &Stmt, mut k: Vec<Frame>, lvl: usize, rt: 
             }
             let vals: Rec = fs.iter().map(|f| Ok((f.name.clone(), value_of(f)?))).collect::<Result<_, RunError>>()?;
             let (merged, conflict) = unify(&subj, &vals);
-            subj = if conflict.is_empty() { Rc::new(merged) } else { with(&subj, &"conflict".into(), rec(conflict)) };
+            subj = if conflict.is_empty() { Arc::new(merged) } else { with(&subj, &"conflict".into(), rec(conflict)) };
         }
         StmtKind::Inc(name, by) => {
             need(&subj, name)?;
@@ -534,7 +534,7 @@ impl<'p> Session<'p> {
                 err = Some((line, e.msg));
             }
         }
-        let mut init = initial(p, entry, Rc::new(Rec::new()));
+        let mut init = initial(p, entry, Arc::new(Rec::new()));
         if let Some((line, msg)) = err {
             init.status = Status::Error;
             init.error = Some(Failure { msg, details: vec![], line });

@@ -9,7 +9,7 @@ use crate::syntax::parse;
 use crate::value::*;
 use axum::Router;
 use axum::http::{StatusCode, header};
-use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::mpsc;
 use tokio::sync::oneshot;
 
@@ -124,7 +124,7 @@ pub fn handle(p: &Program, store: &mut Store, req: &Req) -> Handled {
         Err(msg) => return Handled { status: 400, json: error(&msg), stop: Status::Done, said: vec![], sql: vec![] },
     };
     let mut log = vec![];
-    let mut s = initial(p, &r.word, Rc::new(subj));
+    let mut s = initial(p, &r.word, Arc::new(subj));
     let mut rt = Runtime { log: &mut log, store: Some(store), store_error: None };
     for _ in 0..BUDGET {
         if s.status != Status::Ready {
@@ -150,7 +150,7 @@ pub fn request(r: &Route, job: &Req) -> Result<Rec, String> {
     let mut rec = record(r.params(), &given, "")?;
     if let Some(decls) = &r.body {
         let Some(Value::Rec(given)) = from_json(&job.body) else { return Err("the body must be a JSON object".into()) };
-        rec.insert("body".into(), Value::Rec(Rc::new(record(decls, &given, "")?)));
+        rec.insert("body".into(), Value::Rec(Arc::new(record(decls, &given, "")?)));
     }
     rec.insert("time".into(), Value::Text(now_utc().into()));
     Ok(rec)
@@ -180,9 +180,9 @@ fn decode(ty: &FieldTy, v: &Value, at: &str) -> Result<Value, String> {
         (Col(Int | Num), Value::Num(_)) | (Col(Text), Value::Text(_)) | (Col(Bool), Value::Bool(_)) | (Col(Json), _) => Ok(v.clone()),
         (FieldTy::List(t), Value::List(xs)) => {
             let xs = xs.iter().enumerate().map(|(i, x)| decode(t, x, &format!("{at}[{i}]")));
-            Ok(Value::List(Rc::new(xs.collect::<Result<_, _>>()?)))
+            Ok(Value::List(Arc::new(xs.collect::<Result<_, _>>()?)))
         }
-        (FieldTy::Rec(ds), Value::Rec(r)) => Ok(Value::Rec(Rc::new(record(ds, r, &format!("{at}."))?))),
+        (FieldTy::Rec(ds), Value::Rec(r)) => Ok(Value::Rec(Arc::new(record(ds, r, &format!("{at}."))?))),
         _ => Err(format!("{at} must be {ty}")),
     }
 }
@@ -219,3 +219,11 @@ fn now_utc() -> String {
     let y = yoe + era * 400 + i64::from(m <= 2);
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", secs / 3600, secs / 60 % 60, secs % 60)
 }
+
+// The program, its values and a run's state cross threads: requests run in parallel on them.
+const _: () = {
+    const fn shared<T: Send + Sync>() {}
+    shared::<Program>();
+    shared::<Value>();
+    shared::<crate::machine::State>();
+};

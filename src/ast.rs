@@ -1,7 +1,7 @@
 //! The program as parsed. Positions are 1-based lines and UTF-16 columns.
 use crate::value::{Name, Value};
 use indexmap::IndexMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Pos {
@@ -106,7 +106,7 @@ pub struct Where {
     pub params: Vec<Param>,
 }
 
-pub type Body = Rc<[Stmt]>;
+pub type Body = Arc<[Stmt]>;
 
 #[derive(Clone, Debug)]
 pub enum StmtKind {

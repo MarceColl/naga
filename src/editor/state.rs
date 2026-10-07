@@ -639,7 +639,7 @@ pub mod tests {
     fn the_data_view_shows_the_live_rows() {
         use crate::value::Value;
         let src = "table ts :: {n: Num}\nseed ts = [{n: 1}]\n";
-        let row = |id: f64, n: f64| Value::Rec(Rc::new([("id".into(), Value::Num(id)), ("n".into(), Value::Num(n))].into_iter().collect()));
+        let row = |id: f64, n: f64| Value::Rec(std::sync::Arc::new([("id".into(), Value::Num(id)), ("n".into(), Value::Num(n))].into_iter().collect()));
         let live: crate::runs::Tables = [("ts".into(), vec![row(1.0, 5.0), row(2.0, 7.0)])].into_iter().collect();
         let st = State { live: Some((4170, None)), live_tables: Some(Rc::new(live)), ..State::new(src) };
         let st = keys(st, ":data<cr>");

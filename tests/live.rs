@@ -24,7 +24,7 @@ fn safe_changes_apply_and_keep_the_data() {
     let v1 = program("table notes :: {title: Text}");
     let (mut s, m) = Store::open(&v1, &path).unwrap();
     assert_eq!(m.applied, ["created notes"]);
-    s.insert(&v1.tables["notes"], &naga::value::Value::Rec(std::rc::Rc::new([("title".into(), naga::value::Value::Text("mine".into()))].into_iter().collect()))).unwrap();
+    s.insert(&v1.tables["notes"], &naga::value::Value::Rec(std::sync::Arc::new([("title".into(), naga::value::Value::Text("mine".into()))].into_iter().collect()))).unwrap();
 
     let v2 = program("table notes :: {title: Text, note: Text?}\ntable tags :: {name: Text}");
     assert_eq!(s.migrate(&v2).unwrap(), Migration { applied: vec!["added notes.note".into(), "created tags".into()], pending: vec![] });

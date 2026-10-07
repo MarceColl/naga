@@ -52,7 +52,7 @@ pub fn record(an: &Analysis, run: usize, bps: Vec<usize>) -> Result<Debug, Strin
         let lit = |e: &crate::ast::Expr| crate::eval::eval(e, &crate::eval::Env { subj: &Default::default(), now: 0.0, outer: &[] });
         let body = q.body.as_ref().and_then(|b| lit(b).ok()).map_or_else(String::new, |b| crate::value::to_plain_json(&b));
         let Ok(subj) = request(&p.routes[route], &Req { route, path, query, body }) else { continue };
-        let mut s = machine::initial(p, &p.routes[route].word, Rc::new(subj));
+        let mut s = machine::initial(p, &p.routes[route].word, std::sync::Arc::new(subj));
         let mut rt = Runtime { log: &mut log, store: Some(&mut store), store_error: None };
         hist.push(Snap { req: i, st: s.clone() });
         for _ in 0..BUDGET {

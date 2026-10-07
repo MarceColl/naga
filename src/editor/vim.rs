@@ -52,7 +52,16 @@ fn press(st: State, t: Option<Target>, at: Option<Pos>, shift: bool) -> State {
 // ---------- insert ----------
 fn put_text(st: State, s: &str) -> State {
     let (ls, end) = text::insert(&st.an.lines, st.cursor, s);
-    let st = st.retext(&text::text(&ls), end);
+    aligned(st, ls, end)
+}
+
+/// The text after an insert-mode edit, with the `=` of the definitions around the cursor
+/// lined up as you type; the cursor moves with its text.
+fn aligned(st: State, ls: text::Lines, c: Pos) -> State {
+    let (out, moved) = text::align(&ls, c.line);
+    let after_eq = text::head_eq_col(&ls[c.line - 1]).is_some_and(|eq| c.col > eq);
+    let c = Pos { col: (c.col as isize + if after_eq { moved } else { 0 }).max(0) as usize, ..c };
+    let st = st.retext(&text::text(&out), c);
     State { goal: st.cursor.col, ..st }
 }
 
@@ -60,11 +69,6 @@ fn insert(st: State, k: Key) -> State {
     let c = st.cursor;
     match k {
         Key::Escape => {
-            // leaving insert lines up the = of the definitions around (the cursor moves with its text)
-            let (ls, moved) = text::align(&st.an.lines, c.line);
-            let after_eq = text::head_eq_col(&st.an.lines[c.line - 1]).is_some_and(|eq| c.col > eq);
-            let c = Pos { col: (c.col as isize + if after_eq { moved } else { 0 }).max(0) as usize, ..c };
-            let st = if ls != st.an.lines { st.retext(&text::text(&ls), c) } else { st };
             let cursor = text::clamp(&st.an.lines, Pos { col: c.col.saturating_sub(1), ..c }, false);
             State { mode: Mode::Normal, cursor, goal: cursor.col, ..st }
         }
@@ -84,7 +88,7 @@ fn insert(st: State, k: Key) -> State {
                 col => Pos { col: col - 1, ..c },
             };
             let ls = text::delete(&st.an.lines, from, c);
-            st.retext(&text::text(&ls), from)
+            aligned(st, ls, from)
         }
         Key::Undo => undo(st),
         Key::Left | Key::Right | Key::Up | Key::Down => {
@@ -523,10 +527,17 @@ mod tests {
     }
 
     #[test]
-    fn leaving_insert_lines_up_the_definitions() {
-        let st = keys(State::new("found {-missing} = a\nfound {n} = b\n"), "jA c<esc>");
-        assert_eq!(text(&st), "found {-missing} = a\nfound {n}        = b c\n");
-        assert_eq!((st.cursor.line, st.cursor.col), (2, 21), "the cursor stays on what it typed");
+    fn typing_lines_up_the_definitions_as_it_goes() {
+        let st = keys(State::new("found {-missing} = a\nfound {n} = b\n"), "jA c");
+        assert_eq!(text(&st), "found {-missing} = a\nfound {n}        = b c\n", "aligned before esc");
+        assert_eq!((st.cursor.line, st.cursor.col), (2, 22), "the cursor stays after what it typed");
+        // a longer head pushes the others out, keystroke by keystroke
+        let st = keys(st, "<esc>08liXX");
+        assert_eq!(text(&st), "found {-missing} = a\nfound {nXX}      = b c\n");
+        let st = keys(st, "XXXXXX");
+        assert_eq!(text(&st), "found {-missing}  = a\nfound {nXXXXXXXX} = b c\n");
+        let st = keys(st, "<bs><bs>");
+        assert_eq!(text(&st), "found {-missing} = a\nfound {nXXXXXX}  = b c\n");
     }
 
     #[test]

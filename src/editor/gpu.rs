@@ -324,6 +324,11 @@ impl Gpu {
                 col += n;
             }
         }
+        if let Some((row, col)) = f.caret.filter(|c| c.0 >= first && c.0 - first < self.edges.len()) {
+            let (r, e) = (row - first, &self.edges[row - first]);
+            let x = e.get(col).copied().unwrap_or_else(|| e.last().copied().unwrap_or(l.pad));
+            rect(x, code_top + r as f32 * l.code_line + (l.code_line - glyph_h) / 2.0, 2.0 * l.scale, glyph_h, palette::FG);
+        }
         rect(0.0, bar_top, l.width, bar_h, palette::BG);
         rect(0.0, bar_top, l.width, l.scale.max(1.0), palette::RULE);
         let vertices = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytes(&rects), usage: wgpu::BufferUsages::VERTEX });
@@ -460,13 +465,30 @@ fn set_lines(fonts: &mut FontSystem, buf: &mut Buffer, lines: &[&Line], m: Metri
 impl Gpu {
     /// What sits under a point of the window, in the last frame drawn.
     pub fn target_at(&self, f: &Frame, x: f32, y: f32) -> Option<Target> {
+        let (r, col) = self.cell_at(x, y)?;
+        f.code.get(r)?.target_at(col).cloned()
+    }
+
+    /// The program line and column under a point; past a line's end, its end.
+    pub fn pos_at(&self, f: &Frame, x: f32, y: f32) -> Option<crate::ast::Pos> {
         if y >= self.layout.bar_top || y < self.code_top {
             return None;
         }
         let r = ((y - self.code_top) / self.layout.code_line) as usize;
+        let line = f.code.get(self.first + r).filter(|l| l.src > 0)?;
         let e = self.edges.get(r)?;
-        let col = e.windows(2).position(|w| x >= w[0] && x < w[1])?;
-        f.code.get(self.first + r)?.target_at(col).cloned()
+        let col = e.windows(2).position(|w| x < (w[0] + w[1]) / 2.0).unwrap_or(e.len().saturating_sub(1));
+        Some(crate::ast::Pos { line: line.src, col: col.saturating_sub(line.off) })
+    }
+
+    /// The code row (counting from the first shown) and character under a point.
+    fn cell_at(&self, x: f32, y: f32) -> Option<(usize, usize)> {
+        if y >= self.layout.bar_top || y < self.code_top {
+            return None;
+        }
+        let r = ((y - self.code_top) / self.layout.code_line) as usize;
+        let col = self.edges.get(r)?.windows(2).position(|w| x >= w[0] && x < w[1])?;
+        Some((self.first + r, col))
     }
 }
 

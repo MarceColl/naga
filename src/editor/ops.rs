@@ -177,14 +177,6 @@ pub fn rename(an: &Analysis, word: &str, to: &str) -> R {
     Ok(edits.iter().fold(join(&an.lines), |text, e| replace_in(&split(&text), *e, to)))
 }
 
-/// What was typed in place of `r`; extra lines are indented unless they start a definition.
-pub fn edit_range(an: &Analysis, r: Range, typed: &str) -> String {
-    let typed = typed.replace('\u{a0}', " ");
-    let mut parts = typed.trim_end().split('\n');
-    let first = parts.next().unwrap_or("").to_string();
-    let all: Vec<String> = std::iter::once(first).chain(shape_lines(parts)).collect();
-    replace_in(&lines(an), r, &all.join("\n"))
-}
 
 /// Fills a hole. A fill that restates the whole word (`usable {…} = …`) replaces the line;
 /// otherwise it goes where the hole was. `helpers` are new definitions put after it.

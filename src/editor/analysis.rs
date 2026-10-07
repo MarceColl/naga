@@ -90,13 +90,19 @@ pub struct Analysis {
 
 impl Analysis {
     pub fn new(text: &str) -> Analysis {
+        Analysis::with(text, &mut Checker::default())
+    }
+
+    /// The analysis of `text`, checked by `checker`, which reuses what it solved for earlier
+    /// texts: a keystroke rechecks only the words it touched.
+    pub fn with(text: &str, checker: &mut Checker) -> Analysis {
         let lines: Vec<Vec<char>> = text.split('\n').map(|l| l.chars().collect()).collect();
         let program = parse(text);
         let mut errors: Vec<Error> = program.errors.iter().map(|e| Error { line: e.line, col: e.col, msg: e.msg.clone() }).collect();
         let (mut checked, mut runs) = (None, vec![]);
         if errors.is_empty() {
             let entry = program.words.contains_key("main").then(|| Name::from("main"));
-            let c = Checker::default().check(&program, entry.as_ref());
+            let c = checker.check(&program, entry.as_ref());
             for e in &c.errors {
                 if !errors.iter().any(|x| x.line == e.line && x.msg == e.msg) {
                     errors.push(Error { line: e.line, col: e.col, msg: e.msg.clone() });
@@ -162,12 +168,6 @@ impl Analysis {
         self.steps.iter().filter(|s| s.hole().is_some())
     }
 
-    /// The step's siblings, itself included, in order.
-    pub fn siblings(&self, s: &Step) -> Vec<&Step> {
-        let mut v: Vec<&Step> = self.steps.iter().filter(|x| x.parent == s.parent).collect();
-        v.sort_by_key(|x| x.idx);
-        v
-    }
 
     pub fn def_at(&self, line: usize) -> Option<&Def> {
         self.defs.iter().find(|d| d.line == line)

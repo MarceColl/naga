@@ -1,7 +1,7 @@
 //! The screen as data: what to draw, in which colours, and what each piece of text points at.
 //! colorForth-style: one screen of code on black, colour as meaning, one status line at the bottom.
 use crate::editor::analysis::{Analysis, Range, Step};
-use crate::editor::state::{Data, Edit, Mode, OPS, Sel, State, Tone};
+use crate::editor::state::{Data, Edit, Mode, OPS, State, Tone};
 use crate::ast::ColType;
 use crate::runs::Verdict;
 use crate::editor::debug::Debug;
@@ -74,6 +74,8 @@ pub struct Line {
     pub spans: Vec<Span>,
     /// The program line it shows (a folded seed shows its first).
     pub src: usize,
+    /// Characters before the program's column 0: the debugger's gutter.
+    pub off: usize,
 }
 
 impl Line {
@@ -104,6 +106,8 @@ pub struct Frame {
     pub shape: Vec<Line>,
     pub msg: Line,
     pub stat: Line,
+    /// The insert-mode caret: a code row and a column, drawn as a thin bar.
+    pub caret: Option<(usize, usize)>,
 }
 
 // ---------- tokens ----------
@@ -237,11 +241,6 @@ struct Marks {
     err_lines: Vec<usize>,
 }
 
-fn sel_range(an: &Analysis, ids: &[usize]) -> Option<Range> {
-    let mut ss: Vec<&Step> = ids.iter().filter_map(|&i| an.step(i)).collect();
-    ss.sort_by_key(|s| s.idx);
-    Some(Range { pos: ss.first()?.range.pos, end: ss.last()?.range.end })
-}
 
 pub fn view(st: &State) -> Frame {
     if let Some(d) = &st.data {
@@ -257,10 +256,7 @@ pub fn view(st: &State) -> Frame {
             None => err_lines.push(e.line),
         }
     }
-    let sel = match &st.sel {
-        Some(Sel::Steps(ids)) => sel_range(an, ids),
-        _ => None,
-    };
+    let sel = st.visual().map(|(pos, end)| Range { pos, end });
     let hover = match &st.hover {
         Some(Target::Step(id)) => an.step(*id).map(|s| s.range),
         _ => None,
@@ -268,11 +264,15 @@ pub fn view(st: &State) -> Frame {
     let cur = st.debug.as_ref().and_then(Debug::current);
     let marks = Marks { sel, cur, hover, err_steps, err_lines };
     let mut code = vec![];
+    let mut caret = None;
     let mut folding = false;
     for (li, chars) in an.lines.iter().enumerate() {
         let ln = li + 1;
         let text: String = chars.iter().collect();
-        if text.starts_with("seed") && text[4..].starts_with(char::is_whitespace) {
+        // a seed folds to one line, unless the cursor is in it
+        let seed_end = (li + 1..an.lines.len()).find(|&j| !(an.lines[j].first().is_some_and(|c| c.is_whitespace()) && an.lines[j].iter().any(|c| !c.is_whitespace()))).unwrap_or(an.lines.len());
+        let cursor_in = (ln..=seed_end).contains(&st.cursor.line);
+        if text.starts_with("seed") && text[4..].starts_with(char::is_whitespace) && !cursor_in {
             code.push(gutter(st, ln, seed_line(an, li)));
             folding = true;
             continue;
@@ -292,24 +292,22 @@ pub fn view(st: &State) -> Frame {
             code.extend(edit_rows(st, &marks, &e));
             continue;
         }
-        match &st.mode {
-            Mode::Edit(e) if (e.range.pos.line..=e.range.end.line).contains(&ln) => {
-                if ln == e.range.pos.line {
-                    code.extend(edit_rows(st, &marks, e));
-                }
-            }
-            _ => {
-                let mut line = Line { src: ln, ..Line::default() };
-                code_spans(st, &marks, ln, 0, chars.len(), &mut line);
-                if let Some(d) = st.debug.as_ref().filter(|_| cur.is_some_and(|c| c.pos.line == ln)) {
-                    let (ghost, bad) = ghost(&d.now().st);
-                    line.push(&format!("   ‹ {ghost}"), Style::plain(if bad { ERR } else { FAINT }), None);
-                }
-                code.push(gutter(st, ln, line));
-            }
+        let mut line = Line { src: ln, ..Line::default() };
+        code_spans(st, &marks, ln, 0, chars.len(), &mut line);
+        if let Some(d) = st.debug.as_ref().filter(|_| cur.is_some_and(|c| c.pos.line == ln)) {
+            let (ghost, bad) = ghost(&d.now().st);
+            line.push(&format!("   ‹ {ghost}"), Style::plain(if bad { ERR } else { FAINT }), None);
         }
+        // the cursor: a block on its character, or past the end of the line
+        let here = st.cursor.line == ln && st.debug.is_none() && st.data.is_none();
+        if here && st.mode == Mode::Insert {
+            caret = Some((code.len(), st.cursor.col));
+        } else if here && st.cursor.col >= chars.len() {
+            line.push(" ", Style { fg: BG, bg: Some(FG), ..Style::plain(FG) }, None);
+        }
+        code.push(gutter(st, ln, line));
     }
-    let mut f = Frame { code, ..Frame::default() };
+    let mut f = Frame { code, caret, ..Frame::default() };
     match &st.debug {
         Some(d) => debug_bar(st, d, &mut f),
         None => bar(st, &mut f),
@@ -325,7 +323,7 @@ fn gutter(st: &State, ln: usize, line: Line) -> Line {
         (false, true) => ("› ", DEF),
         _ => ("  ", FAINT),
     };
-    let mut out = Line { src: line.src, ..Line::default() };
+    let mut out = Line { src: line.src, off: 2, ..Line::default() };
     out.push(mark, Style::plain(fg), None);
     out.spans.extend(line.spans);
     out
@@ -502,11 +500,11 @@ fn code_spans(st: &State, m: &Marks, ln: usize, a: usize, b: usize, line: &mut L
         if m.cur.is_some_and(|r| r.contains(ln, i)) && !is_hole {
             style = Style { fg: BG, bg: Some(DEF), ..style };
         }
-        let selected = m.sel.is_some_and(|r| r.contains(ln, i) && ch != ' ')
-            || (in_def && matches!(&st.sel, Some(Sel::Def(n, l)) if Some(n) == def.map(|d| &d.name) && *l == ln));
+        let block = st.cursor == (crate::ast::Pos { line: ln, col: i }) && st.mode != Mode::Insert && st.debug.is_none() && st.data.is_none();
+        let selected = m.sel.is_some_and(|r| r.contains(ln, i)) || block;
         if selected {
             style = Style { fg: if is_hole { HOLE } else { BG }, bg: Some(FG), ..style };
-        } else if m.hover.is_some_and(|r| r.contains(ln, i)) && !is_hole && st.mode == Mode::Idle {
+        } else if m.hover.is_some_and(|r| r.contains(ln, i)) && !is_hole && st.mode != Mode::Insert {
             style.bg = Some(HOVER);
         }
         style.err = (sid != 0 && m.err_steps.contains(&sid)) || (in_def && m.err_lines.contains(&ln));
@@ -515,7 +513,7 @@ fn code_spans(st: &State, m: &Marks, ln: usize, a: usize, b: usize, line: &mut L
 }
 
 // ---------- the status bar ----------
-const HINT: &str = "click a red hole to write it · shift-click it to hand it to an agent · click steps to select them, then type extract · inline · hole · rework · edit · drop · swap · rename · click a table to see its rows · type debug 1–7 to step through a run · ctrl-z undoes";
+const HINT: &str = "i a o to write · esc · v V to select · :extract name :inline :hole :rework :drop :swap :rename name · :data · :debug n · :reset table · enter on a hole writes it, ga hands it to claude · u ⌃r · it’s live as soon as it parses";
 
 fn upper(s: &str) -> String {
     s.to_uppercase()
@@ -547,6 +545,17 @@ fn shapes_at(an: &Analysis, s: &Step) -> (Vec<String>, Vec<String>) {
 /// `HOLES n · ERRORS n · RUNS p/t`, in red where something needs doing.
 fn stat(st: &State, f: &mut Frame) {
     let an = &st.an;
+    let mode = match &st.mode {
+        Mode::Normal => "NORMAL",
+        Mode::Insert => "INSERT",
+        Mode::Visual(_, false) => "VISUAL",
+        Mode::Visual(_, true) => "V-LINE",
+        Mode::Cmd(..) => "COMMAND",
+    };
+    f.stat.push(&format!("{mode} {}:{} · ", st.cursor.line, st.cursor.col + 1), Style::plain(if st.mode == Mode::Insert { CALL } else { FG }), None);
+    if st.image.text != st.an.text {
+        f.stat.push("DOESN’T PARSE · ", Style::plain(ERR), None);
+    }
     let (holes, errs) = (an.holes().count(), an.errors.len());
     let dim = Style::plain(DIM);
     f.stat.push(&format!("HOLES {holes}"), if holes > 0 { Style::plain(HOLE) } else { dim }, None);
@@ -570,10 +579,10 @@ fn bar(st: &State, f: &mut Frame) {
     let dim = Style::plain(DIM);
     stat(st, f);
     match (&st.mode, &st.msg) {
-        (Mode::Cmd(c), _) => {
+        (Mode::Cmd(c, _), _) => {
             let first = c.split_whitespace().next().unwrap_or("").to_lowercase();
             let sug: Vec<&str> = OPS.iter().copied().filter(|o| o.starts_with(&first)).collect();
-            f.msg.push(&format!("› {}▌", upper(c)), Style::plain(FG), None);
+            f.msg.push(&format!(":{}▌", upper(c)), Style::plain(FG), None);
             f.msg.push(&format!("  {}", upper(&sug.join(" · "))), dim, None);
         }
         (_, Some((text, tone))) => {
@@ -588,11 +597,10 @@ fn bar(st: &State, f: &mut Frame) {
         }
         (_, None) => f.msg.push(&upper(HINT), dim, None),
     }
-    let target = st.hover.clone().or_else(|| match &st.sel {
-        Some(Sel::Def(n, l)) => Some(Target::Def(n.clone(), *l)),
-        Some(Sel::Steps(ids)) => ids.last().map(|&i| Target::Step(i)),
-        None => None,
-    });
+    // the bar describes what the mouse is over, else what the cursor is on
+    let c = st.cursor;
+    let def = an.def_at(c.line).filter(|d| c.col < d.name.chars().count()).map(|d| Target::Def(d.name.clone(), c.line));
+    let target = st.hover.clone().or(def).or_else(|| st.step_at_cursor().map(|s| Target::Step(s.id)));
     f.shape = target.map(|t| shape(an, &t)).unwrap_or_default();
     if f.shape.is_empty() && !st.pending.is_empty() {
         let mut l = Line::default();
@@ -619,7 +627,7 @@ fn shape(an: &Analysis, t: &Target) -> Vec<Line> {
             first.push(" : ", k, None);
             first.push(&upper(&sig_text(an, name).map_or_else(|| "not checked".into(), |s| s.join("  ;  "))), fg, None);
             let errs = an.errors.iter().filter(|x| an.defs.iter().any(|d| &d.name == name && d.line == x.line));
-            lines.extend(errs.map(|x| Line { spans: vec![Span { text: upper(&x.msg), style: e, target: None }], src: 0 }));
+            lines.extend(errs.map(|x| Line { spans: vec![Span { text: upper(&x.msg), style: e, target: None }], src: 0, off: 0 }));
         }
         Target::Step(id) => {
             let Some(s) = an.step(*id) else { return vec![] };
@@ -662,7 +670,7 @@ fn shape(an: &Analysis, t: &Target) -> Vec<Line> {
             lines.push(second);
             let r = s.range;
             let errs = an.errors.iter().filter(|x| x.line >= r.pos.line && x.line <= r.end.line && (x.col >= r.pos.col || x.line > r.pos.line));
-            lines.extend(errs.take(2).map(|x| Line { spans: vec![Span { text: upper(&x.msg), style: e, target: None }], src: 0 }));
+            lines.extend(errs.take(2).map(|x| Line { spans: vec![Span { text: upper(&x.msg), style: e, target: None }], src: 0, off: 0 }));
         }
     }
     lines.insert(0, first);
@@ -741,7 +749,7 @@ fn data_view(st: &State, d: &Data) -> Frame {
     }
     f.code.extend([names, types]);
     if rows.is_empty() {
-        f.code.push(Line { spans: vec![Span { text: "  NO ROWS".into(), style: Style::plain(FAINT), target: None }], src: 0 });
+        f.code.push(Line { spans: vec![Span { text: "  NO ROWS".into(), style: Style::plain(FAINT), target: None }], src: 0, off: 0 });
     }
     for (r, mark, changed) in &rows {
         let mut line = Line::default();
@@ -770,10 +778,10 @@ fn data_view(st: &State, d: &Data) -> Frame {
         f.code.push(h);
         let ops: Vec<&String> = o.sql.iter().filter(|l| l.contains(&q)).collect();
         if ops.is_empty() {
-            f.code.push(Line { spans: vec![Span { text: "NOTHING".into(), style: Style::plain(FAINT), target: None }], src: 0 });
+            f.code.push(Line { spans: vec![Span { text: "NOTHING".into(), style: Style::plain(FAINT), target: None }], src: 0, off: 0 });
         }
         for l in ops {
-            f.code.push(Line { spans: vec![Span { text: l.clone(), style: Style::plain(FAINT), target: None }], src: 0 });
+            f.code.push(Line { spans: vec![Span { text: l.clone(), style: Style::plain(FAINT), target: None }], src: 0, off: 0 });
         }
     }
 

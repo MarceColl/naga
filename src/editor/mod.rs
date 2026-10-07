@@ -6,6 +6,8 @@ mod debug;
 mod gpu;
 mod ops;
 mod state;
+mod text;
+mod vim;
 mod view;
 
 use state::{Event, Key, State, update};
@@ -26,6 +28,7 @@ enum Wake {
 
 struct App {
     proxy: EventLoopProxy<Wake>,
+    quit: bool,
     /// The live server's tables, when the editor is serving.
     store: Option<crate::store::Store>,
     state: Option<State>,
@@ -40,12 +43,13 @@ struct App {
 
 impl App {
     fn send(&mut self, ev: Event) {
-        let before = self.state.as_ref().map(|s| s.an.clone());
+        // the image (the last text that parsed) is what's live: the file, the tables, the server
+        let before = self.state.as_ref().map(|s| s.image.clone());
         let mut next = update(self.state.take().expect("a state"), ev);
         // the live database follows the program: safe changes at once, the rest pending
         if let Some(store) = &mut self.store {
-            if before.as_ref().is_some_and(|b| b.text != next.an.text) && next.an.program.errors.is_empty() {
-                match store.migrate(&next.an.program) {
+            if before.as_ref().is_some_and(|b| b.text != next.image.text) {
+                match store.migrate(&next.image.program) {
                     Ok(m) => {
                         if !m.applied.is_empty() {
                             next.msg = Some((format!("live · {}", m.applied.join(" · ")), state::Tone::Ok));
@@ -55,13 +59,17 @@ impl App {
                     Err(e) => next.msg = Some((format!("live database: {}", e.msg), state::Tone::No)),
                 }
             }
-            if let Some(state::Effect::Reset(t)) = next.effect.take() {
-                next.msg = Some(match store.reset(&next.an.program, &t) {
+            if let Some(state::Effect::Reset(t)) = next.effect.clone() {
+                next.effect = None;
+                next.msg = Some(match store.reset(&next.image.program, &t) {
                     Ok(()) => (format!("reset {t}: recreated and seeded"), state::Tone::Ok),
                     Err(e) => (format!("reset {t}: {}", e.msg), state::Tone::No),
                 });
-                next.pending = store.migrate(&next.an.program).map(|m| m.pending).unwrap_or_default();
+                next.pending = store.migrate(&next.image.program).map(|m| m.pending).unwrap_or_default();
             }
+        }
+        if next.effect == Some(state::Effect::Quit) {
+            self.quit = true;
         }
         // a question for Claude goes out on its own thread; the answer comes back as a Wake
         if let Some((id, prompt)) = next.ask.take() {
@@ -70,9 +78,8 @@ impl App {
                 let _ = proxy.send_event(Wake::Reply(id, claude::ask(&prompt)));
             });
         }
-        // the text is the program: every change to it goes straight to the file
-        if before.is_some_and(|b| b.text != next.an.text)
-            && let Err(e) = std::fs::write(&self.path, &next.an.text)
+        if before.is_some_and(|b| b.text != next.image.text)
+            && let Err(e) = std::fs::write(&self.path, &next.image.text)
         {
             eprintln!("naga: {}: {e}", self.path);
         }
@@ -82,6 +89,10 @@ impl App {
             g.redraw();
         }
     }
+    fn pos(&self) -> Option<crate::ast::Pos> {
+        self.gpu.as_ref()?.pos_at(&self.frame, self.cursor.0, self.cursor.1)
+    }
+
     fn target(&self) -> Option<view::Target> {
         self.gpu.as_ref()?.target_at(&self.frame, self.cursor.0, self.cursor.1)
     }
@@ -93,7 +104,7 @@ impl ApplicationHandler<Wake> for App {
             Wake::Reply(id, r) => self.send(Event::AgentReply(id, r)),
             Wake::Request(raw, reply) => {
                 let (Some(st), Some(store)) = (&self.state, &mut self.store) else { return };
-                let h = crate::serve::respond(&st.an.program, store, &raw);
+                let h = crate::serve::respond(&st.image.program, store, &raw);
                 let line = format!("{} {}{} → {}", raw.method, raw.path, if raw.query.is_empty() { String::new() } else { format!("?{}", raw.query) }, h.status);
                 let _ = reply.send((h.status, h.json));
                 self.send(Event::Served(line));
@@ -103,6 +114,9 @@ impl ApplicationHandler<Wake> for App {
 
     /// While the agent types its fill, time moves in 60ths of a second.
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        if self.quit {
+            return el.exit();
+        }
         let typing = self.state.as_ref().and_then(|s| s.agent.as_ref()).is_some_and(|a| a.fill.is_some());
         el.set_control_flow(match typing {
             true => ControlFlow::WaitUntil(std::time::Instant::now() + std::time::Duration::from_millis(16)),
@@ -154,10 +168,10 @@ impl ApplicationHandler<Wake> for App {
                 self.cursor = (position.x as f32, position.y as f32);
                 let t = self.target();
                 if self.state.as_ref().is_some_and(|s| s.hover != t) || self.pressed {
-                    self.send(Event::Hover(t, self.pressed));
+                    self.send(Event::Hover(t, self.pos(), self.pressed));
                 }
             }
-            WindowEvent::CursorLeft { .. } => self.send(Event::Hover(None, false)),
+            WindowEvent::CursorLeft { .. } => self.send(Event::Hover(None, None, false)),
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. }
                 if self.gpu.as_ref().is_some_and(|g| self.cursor.1 < g.layout.top) =>
             {
@@ -167,7 +181,7 @@ impl ApplicationHandler<Wake> for App {
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
                 self.pressed = state == ElementState::Pressed;
-                let ev = if self.pressed { Event::Press(self.target(), self.mods.shift_key()) } else { Event::Release };
+                let ev = if self.pressed { Event::Press(self.target(), self.pos(), self.mods.shift_key()) } else { Event::Release };
                 self.send(ev);
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -192,6 +206,9 @@ impl ApplicationHandler<Wake> for App {
                     WKey::Named(NamedKey::Enter) => Key::Enter,
                     WKey::Named(NamedKey::Backspace) => Key::Backspace,
                     WKey::Named(NamedKey::Home) => Key::Home,
+                    WKey::Named(NamedKey::Tab) => Key::Tab,
+                    WKey::Character(c) if self.mods.control_key() && c.eq_ignore_ascii_case("r") => Key::Redo,
+                    WKey::Character(c) if self.mods.control_key() && c == "[" => Key::Escape,
                     WKey::Named(NamedKey::Space) if !command => Key::Char(' '),
                     WKey::Character(c) if command && c.eq_ignore_ascii_case("z") => Key::Undo,
                     WKey::Character(c) if !command => match event.text.as_deref().and_then(|t| t.chars().next()) {
@@ -245,8 +262,9 @@ fn shot(state: State, out: &str, opts: &std::collections::HashMap<&str, &str>) -
     // --click line:col, a program line
     if let Some((l, c)) = opts.get("--click").and_then(|rc| rc.split_once(':')).and_then(|(r, c)| Some((r.parse::<usize>().ok()?, c.parse::<usize>().ok()?))) {
         let t = view(&st).code.iter().find(|x| x.src == l).and_then(|x| x.target_at(c).cloned());
-        st = update(update(st, Event::Press(t.clone(), false)), Event::Release);
-        st = update(st, Event::Hover(t, false));
+        let at = Some(crate::ast::Pos { line: l, col: c });
+        st = update(update(st, Event::Press(t.clone(), at, false)), Event::Release);
+        st = update(st, Event::Hover(t, at, false));
     }
     for c in opts.get("--type").copied().unwrap_or("").chars() {
         st = update(st, Event::Key(Key::Char(c), false));
@@ -271,7 +289,7 @@ pub fn edit(path: &str, args: &[String]) -> Result<(), String> {
     }
     let frame = view(&state);
     let el = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
-    let mut app = App { proxy: el.create_proxy(), store: None, state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into() };
+    let mut app = App { proxy: el.create_proxy(), quit: false, store: None, state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into() };
     el.run_app(&mut app).map_err(|e| e.to_string())
 }
 
@@ -297,6 +315,6 @@ pub fn start(path: &str, port: u16) -> Result<(), String> {
     });
     state.live = Some((port, None));
     let frame = view(&state);
-    let mut app = App { proxy: el.create_proxy(), store: Some(store), state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into() };
+    let mut app = App { proxy: el.create_proxy(), quit: false, store: Some(store), state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into() };
     el.run_app(&mut app).map_err(|e| e.to_string())
 }

@@ -19,6 +19,8 @@ pub struct Session {
     state: Rec,
     html: String,
     out: Option<mpsc::UnboundedSender<String>>,
+    /// When it was mounted: one that no socket claims within a minute is dropped.
+    born: std::time::Instant,
 }
 
 #[derive(Default)]
@@ -125,8 +127,10 @@ pub fn mount(live: &Live, raw: &Raw) -> Option<(u16, String)> {
         Err(msg) => return Some((500, trouble(&msg))),
     };
     let id = live.pages.next.fetch_add(1, Ordering::Relaxed) + 1;
-    let session = Session { word: page.0.word.clone(), state, html: html.clone(), out: None };
+    let session = Session { word: page.0.word.clone(), state, html: html.clone(), out: None, born: std::time::Instant::now() };
     if let Ok(mut m) = live.pages.map.lock() {
+        // pages whose socket never came
+        m.retain(|_, s| s.try_lock().map_or(true, |s| s.out.is_some() || s.born.elapsed().as_secs() < 60));
         m.insert(id, Arc::new(Mutex::new(session)));
     }
     let doc = format!(
@@ -137,9 +141,9 @@ pub fn mount(live: &Live, raw: &Raw) -> Option<(u16, String)> {
 }
 
 /// An event from the page: the word runs on the state and the event; a changed page is sent.
+/// If it wrote to a table, every other page is refreshed too.
 pub fn event(live: &Live, id: u64, msg: &str) {
     let Some(session) = live.pages.get(id) else { return };
-    let Ok(mut s) = session.lock() else { return };
     let event = match from_json(msg) {
         Some(Value::Rec(r)) => {
             let mut r = (*r).clone();
@@ -150,10 +154,22 @@ pub fn event(live: &Live, id: u64, msg: &str) {
         }
         _ => return,
     };
+    if run_on(live, &session, Some(event)) {
+        refresh(live, Some(id));
+    }
+}
+
+/// Runs a page's word on its state (and an event, if any) and sends the page if it changed.
+/// True when the word wrote to a table.
+fn run_on(live: &Live, session: &Mutex<Session>, event: Option<Value>) -> bool {
+    let Ok(mut s) = session.lock() else { return false };
     let mut subj = s.state.clone();
-    subj.insert("event".into(), event);
+    if let Some(e) = event {
+        subj.insert("event".into(), e);
+    }
     let p = live.program();
     let ran = live.with_store(|st| run_word(&p, st, &s.word, subj));
+    let wrote = ran.as_ref().is_ok_and(|r| r.sql.iter().any(|q| ["INSERT", "UPDATE", "DELETE"].iter().any(|w| q.starts_with(w))));
     let html = match ran.and_then(|r| r.out).and_then(|subj| split(&subj)) {
         Ok((state, html)) => {
             s.state = state;
@@ -165,6 +181,18 @@ pub fn event(live: &Live, id: u64, msg: &str) {
         s.html = html.clone();
         if let Some(out) = &s.out {
             let _ = out.send(html);
+        }
+    }
+    wrote
+}
+
+/// Every open page (but `except`) runs its word again on its state, with no event: the
+/// tables changed, or the program did.
+pub fn refresh(live: &Live, except: Option<u64>) {
+    let all: Vec<(u64, Arc<Mutex<Session>>)> = live.pages.map.lock().map(|m| m.iter().map(|(k, v)| (*k, v.clone())).collect()).unwrap_or_default();
+    for (id, s) in all {
+        if Some(id) != except {
+            run_on(live, &s, None);
         }
     }
 }

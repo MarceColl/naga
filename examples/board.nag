@@ -1,0 +1,13 @@
+-- A live page on a table: whatever one page adds, every open page shows.
+
+table notes :: {text: Text}
+
+live /board = board
+
+board {event: {name: :add}}  = +{note: {text: event.form.text}} notes.insert -{note} render
+board                        = render
+
+render = notes.all @notes( +{li: [:li, text]} )
+         +{html: [:main, [:ul, notes.li],
+                  [:form, {on-submit: :add}, [:input, {name: "text"}], [:button, "Add"]]]}
+         -{notes}

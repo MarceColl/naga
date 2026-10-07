@@ -59,10 +59,14 @@ impl Live {
         self.program.read().map_or_else(|e| e.into_inner().clone(), |p| p.clone())
     }
 
-    /// From the next request on, requests run on `p`.
-    pub fn publish(&self, p: Arc<Program>) {
+    /// From the next request on, requests run on `p`, and open pages show what it renders.
+    pub fn publish(self: &Arc<Self>, p: Arc<Program>) {
         if let Ok(mut cur) = self.program.write() {
             *cur = p;
+        }
+        if !self.pages.is_empty() {
+            let me = self.clone();
+            std::thread::Builder::new().stack_size(64 << 20).spawn(move || crate::live::refresh(&me, None)).ok();
         }
     }
 
@@ -81,10 +85,15 @@ impl Live {
         Ok(r)
     }
 
-    /// Answers a request on the program as it is now.
+    /// Answers a request on the program as it is now; if it wrote to a table, open pages
+    /// refresh.
     pub fn answer(&self, raw: &Raw) -> Handled {
         let p = self.program();
-        self.with_store(|s| respond(&p, s, raw)).unwrap_or_else(|e| Handled { status: 500, json: error(&e), stop: Status::Error, said: vec![], sql: vec![] })
+        let h = self.with_store(|s| respond(&p, s, raw)).unwrap_or_else(|e| Handled { status: 500, json: error(&e), stop: Status::Error, said: vec![], sql: vec![] });
+        if h.sql.iter().any(|q| ["INSERT", "UPDATE", "DELETE"].iter().any(|w| q.starts_with(w))) {
+            crate::live::refresh(self, None);
+        }
+        h
     }
 }
 

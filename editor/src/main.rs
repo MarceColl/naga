@@ -87,7 +87,11 @@ impl ApplicationHandler<Wake> for App {
         if self.gpu.is_some() {
             return;
         }
-        let attrs = Window::default_attributes().with_title(format!("naga · {}", self.path)).with_inner_size(winit::dpi::LogicalSize::new(1280.0, 860.0));
+        // frameless: the code goes edge to edge; the strip above it moves the window
+        let attrs = Window::default_attributes()
+            .with_title(format!("naga · {}", self.path))
+            .with_decorations(false)
+            .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 860.0));
         let window = Arc::new(el.create_window(attrs).expect("a window"));
         let size = window.inner_size();
         self.gpu = Some(pollster::block_on(gpu::Gpu::new(Some(window.clone()), (size.width, size.height), window.scale_factor() as f32)));
@@ -121,6 +125,13 @@ impl ApplicationHandler<Wake> for App {
                 }
             }
             WindowEvent::CursorLeft { .. } => self.send(Event::Hover(None, false)),
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. }
+                if self.gpu.as_ref().is_some_and(|g| self.cursor.1 < g.layout.top) =>
+            {
+                if let Some(w) = &self.window {
+                    let _ = w.drag_window();
+                }
+            }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
                 self.pressed = state == ElementState::Pressed;
                 let ev = if self.pressed { Event::Press(self.target(), self.mods.shift_key()) } else { Event::Release };
@@ -135,6 +146,10 @@ impl ApplicationHandler<Wake> for App {
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 let command = self.mods.super_key() || self.mods.control_key();
+                // no close button, so ⌘W and ⌘Q close it
+                if self.mods.super_key() && matches!(&event.logical_key, WKey::Character(c) if c.eq_ignore_ascii_case("w") || c.eq_ignore_ascii_case("q")) {
+                    return el.exit();
+                }
                 let key = match &event.logical_key {
                     WKey::Named(NamedKey::ArrowLeft) => Key::Left,
                     WKey::Named(NamedKey::ArrowRight) => Key::Right,

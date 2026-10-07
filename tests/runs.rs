@@ -88,3 +88,13 @@ fn statements_know_where_they_end_and_the_checker_shapes_around_them() {
     assert_eq!(text(&r.after, (1, 7)), ["{..r, n: Num}"]);
     assert_eq!(text(&r.before, (4, 30)), ["{..r, n}"]);
 }
+
+#[test]
+fn a_word_that_calls_itself_first_stops_quickly() {
+    let p = parse("route GET /x = w\nw = +{n: 3} down +{status: 200, json: n}\ndown = down n-1\nrun \"x\"\n  GET /x → 200\n");
+    let t = std::time::Instant::now();
+    let o = run(&p, &p.runs[0]);
+    assert_eq!(o.verdict, Verdict::Error);
+    assert_eq!(o.detail.as_deref(), Some("down is 2000 calls deep: does it change something before calling itself again? (line 3)"));
+    assert!(t.elapsed().as_millis() < 500, "{:?}", t.elapsed());
+}

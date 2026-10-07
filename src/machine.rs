@@ -271,6 +271,9 @@ pub fn initial(p: &Program, entry: &Name, subj: Arc<Rec>) -> State {
     }
 }
 
+/// How deep calls may nest.
+const DEPTH: usize = 2000;
+
 pub fn step(p: &Program, s: &State, rt: &mut Runtime) -> State {
     if s.status != Status::Ready {
         return s.clone();
@@ -311,6 +314,11 @@ fn exec(p: &Program, s: &State, stmt: &Stmt, mut k: Vec<Frame>, lvl: usize, rt: 
                     n.shift_remove(t);
                 });
                 subj = Arc::new(n);
+            }
+            // a call with steps after it grows the stack (a last call doesn't): one that keeps
+            // calling itself first would never end, and each step would get slower
+            if k.len() >= DEPTH {
+                return fail(format!("{name} is {DEPTH} calls deep: does it change something before calling itself again?"));
             }
             k.push(Frame::Seq { body: c.body.clone(), i: 0, lvl });
         }

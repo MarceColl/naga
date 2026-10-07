@@ -560,6 +560,9 @@ fn stat(st: &State, f: &mut Frame) {
             f.stat.push(&format!(" {}", upper(l)), dim, None);
         }
     }
+    if !st.pending.is_empty() {
+        f.stat.push(&format!(" · PENDING {}", st.pending.len()), Style::plain(ERR), None);
+    }
 }
 
 fn bar(st: &State, f: &mut Frame) {
@@ -591,6 +594,11 @@ fn bar(st: &State, f: &mut Frame) {
         None => None,
     });
     f.shape = target.map(|t| shape(an, &t)).unwrap_or_default();
+    if f.shape.is_empty() && !st.pending.is_empty() {
+        let mut l = Line::default();
+        l.push(&upper(&format!("pending: {} — :reset the table to apply", st.pending.join(" · "))), Style::plain(ERR), None);
+        f.shape.push(l);
+    }
 }
 
 fn shape(an: &Analysis, t: &Target) -> Vec<Line> {

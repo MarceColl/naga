@@ -51,6 +51,12 @@ pub enum Key {
     Home,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Effect {
+    /// Drop the table, then create and seed it again.
+    Reset(Name),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
     Plain,
@@ -98,6 +104,10 @@ pub struct State {
     pub agents: u64,
     /// The live server's port and the last request it answered.
     pub live: Option<(u16, Option<String>)>,
+    /// Table changes the live database can't take without losing data.
+    pub pending: Vec<String>,
+    /// Something only the app can do (it holds the live database), waiting to be done.
+    pub effect: Option<Effect>,
     pub undo: Vec<String>,
     pub sel: Option<Sel>,
     /// Where a shift-extended selection started.
@@ -113,7 +123,7 @@ pub struct State {
     pub row_lines: Rc<Vec<usize>>,
 }
 
-pub const OPS: [&str; 10] = ["extract name", "inline", "hole note", "rework", "edit", "drop", "swap", "rename name", "data", "debug 1–7"];
+pub const OPS: [&str; 11] = ["extract name", "inline", "hole note", "rework", "edit", "drop", "swap", "rename name", "data", "debug 1–7", "reset table"];
 
 impl State {
     pub fn new(text: &str) -> State {
@@ -125,6 +135,8 @@ impl State {
             ask: None,
             agents: 0,
             live: None,
+            pending: vec![],
+            effect: None,
             undo: vec![],
             sel: None,
             anchor: None,
@@ -489,6 +501,11 @@ fn run(st: State, raw: &str) -> State {
             };
             start_debug(st, i)
         }
+        "reset" => match an.program.tables.get(arg.as_str()) {
+            _ if st.live.is_none() => st.say("reset works on the live database — naga start", Tone::No),
+            Some(t) => State { effect: Some(Effect::Reset(t.name.clone())), ..st },
+            None => st.say(format!("there's no table called {arg}"), Tone::No),
+        },
         "rework" => {
             let Some(ids) = &ids else { return st.say(need("steps"), Tone::No) };
             let punched = ops::punch(&an, ids, &arg).and_then(|(text, original, note)| Ok((parse_ok(&text)?, original, note)));

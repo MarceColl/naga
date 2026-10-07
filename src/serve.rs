@@ -4,7 +4,7 @@
 use crate::ast::*;
 use crate::machine::{Runtime, Status, initial, step};
 use crate::num::json_str;
-use crate::store::Store;
+use crate::store::{Migration, Store};
 use crate::syntax::parse;
 use crate::value::*;
 use axum::Router;
@@ -84,7 +84,11 @@ pub fn start(src: String, db: std::path::PathBuf) -> Result<Router, String> {
         .spawn(move || {
             let p = parse(&src);
             let mut store = match open(&p, &db) {
-                Ok(s) => s,
+                Ok((s, m)) => {
+                    m.applied.iter().for_each(|a| println!("naga: {a}"));
+                    m.pending.iter().for_each(|a| println!("naga: pending: {a} — the table keeps its old shape"));
+                    s
+                }
                 Err(e) => return drop(ready_tx.send(Err(e))),
             };
             let _ = ready_tx.send(Ok(()));
@@ -101,14 +105,11 @@ pub fn start(src: String, db: std::path::PathBuf) -> Result<Router, String> {
     Ok(router(move |raw, reply| drop(tx.send((raw, reply)))))
 }
 
-pub fn open(p: &Program, db: &std::path::Path) -> Result<Store, String> {
+pub fn open(p: &Program, db: &std::path::Path) -> Result<(Store, Migration), String> {
     if !p.errors.is_empty() {
         return Err(p.errors.iter().map(|e| format!("parse {}:{} {}", e.line, e.col, e.msg)).collect::<Vec<_>>().join("\n"));
     }
-    let (mut store, created) = Store::open(p, db).map_err(|e| e.msg)?;
-    store.seed(p, &created).map_err(|(line, e)| format!("seed on line {line}: {}", e.msg))?;
-    store.log.clear();
-    Ok(store)
+    Store::open(p, db).map_err(|e| e.msg)
 }
 
 fn error(msg: &str) -> String {

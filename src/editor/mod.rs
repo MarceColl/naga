@@ -42,6 +42,27 @@ impl App {
     fn send(&mut self, ev: Event) {
         let before = self.state.as_ref().map(|s| s.an.clone());
         let mut next = update(self.state.take().expect("a state"), ev);
+        // the live database follows the program: safe changes at once, the rest pending
+        if let Some(store) = &mut self.store {
+            if before.as_ref().is_some_and(|b| b.text != next.an.text) && next.an.program.errors.is_empty() {
+                match store.migrate(&next.an.program) {
+                    Ok(m) => {
+                        if !m.applied.is_empty() {
+                            next.msg = Some((format!("live · {}", m.applied.join(" · ")), state::Tone::Ok));
+                        }
+                        next.pending = m.pending;
+                    }
+                    Err(e) => next.msg = Some((format!("live database: {}", e.msg), state::Tone::No)),
+                }
+            }
+            if let Some(state::Effect::Reset(t)) = next.effect.take() {
+                next.msg = Some(match store.reset(&next.an.program, &t) {
+                    Ok(()) => (format!("reset {t}: recreated and seeded"), state::Tone::Ok),
+                    Err(e) => (format!("reset {t}: {}", e.msg), state::Tone::No),
+                });
+                next.pending = store.migrate(&next.an.program).map(|m| m.pending).unwrap_or_default();
+            }
+        }
         // a question for Claude goes out on its own thread; the answer comes back as a Wake
         if let Some((id, prompt)) = next.ask.take() {
             let proxy = self.proxy.clone();
@@ -260,7 +281,8 @@ pub fn start(path: &str, port: u16) -> Result<(), String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("naga: {path}: {e}"))?;
     let mut state = State::new(&text);
     let db = std::path::Path::new(path).with_extension("db");
-    let store = crate::serve::open(&state.an.program, &db)?;
+    let (store, m) = crate::serve::open(&state.an.program, &db)?;
+    state.pending = m.pending;
     let el = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
     let proxy = el.create_proxy();
     let listener = std::net::TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("naga: port {port}: {e}"))?;

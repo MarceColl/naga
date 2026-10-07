@@ -228,6 +228,16 @@ fn check_row<'a>(t: &Table, v: &'a Value, what: &str) -> Result<&'a Rec, RunErro
     Ok(r)
 }
 
+/// A column as SQLite has it: name, SQL type, NOT NULL.
+type SqlCol = (String, String, bool);
+
+/// What making a database fit the program did, and what it left because data could be lost.
+#[derive(Debug, Default, PartialEq)]
+pub struct Migration {
+    pub applied: Vec<String>,
+    pub pending: Vec<String>,
+}
+
 pub struct Store {
     db: Connection,
     /// Every statement run, with the step it ran at (-1 before the run starts).
@@ -242,29 +252,75 @@ enum Out {
 
 impl Store {
     pub fn new(p: &Program) -> Result<Store, RunError> {
-        Ok(Self::at(Connection::open_in_memory(), p)?.0)
-    }
-
-    /// A database file that outlives the run, with the tables it had to create.
-    pub fn open(p: &Program, path: &std::path::Path) -> Result<(Store, Vec<Name>), RunError> {
-        Self::at(Connection::open(path), p)
-    }
-
-    fn at(db: rusqlite::Result<Connection>, p: &Program) -> Result<(Store, Vec<Name>), RunError> {
-        let mut s = Store { db: db.map_err(sql_err)?, log: vec![], tick: -1 };
-        let mut created = vec![];
+        let mut s = Store { db: Connection::open_in_memory().map_err(sql_err)?, log: vec![], tick: -1 };
         for t in p.tables.values() {
-            let exists = s.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1").and_then(|mut st| st.exists([&*t.name])).map_err(sql_err)?;
-            if exists {
-                continue;
-            }
-            let cols: Vec<String> = std::iter::once("\"id\" INTEGER PRIMARY KEY".to_string())
-                .chain(t.cols.iter().map(|c| format!("{} {}{}", qi(&c.name), c.ty.sql(), if c.opt { "" } else { " NOT NULL" })))
-                .collect();
-            s.q(&format!("CREATE TABLE {} ({})", qi(&t.name), cols.join(", ")), vec![], true, false)?;
-            created.push(t.name.clone());
+            s.create(t)?;
         }
-        Ok((s, created))
+        Ok(s)
+    }
+
+    /// A database file that outlives the run, made to fit the program (see `migrate`).
+    pub fn open(p: &Program, path: &std::path::Path) -> Result<(Store, Migration), RunError> {
+        let mut s = Store { db: Connection::open(path).map_err(sql_err)?, log: vec![], tick: -1 };
+        let m = s.migrate(p)?;
+        Ok((s, m))
+    }
+
+    fn create(&mut self, t: &Table) -> Result<(), RunError> {
+        let cols: Vec<String> = std::iter::once("\"id\" INTEGER PRIMARY KEY".to_string())
+            .chain(t.cols.iter().map(|c| format!("{} {}{}", qi(&c.name), c.ty.sql(), if c.opt { "" } else { " NOT NULL" })))
+            .collect();
+        self.q(&format!("CREATE TABLE {} ({})", qi(&t.name), cols.join(", ")), vec![], true, false)?;
+        Ok(())
+    }
+
+    /// The table's columns as SQLite has them, or None when it doesn't exist.
+    fn columns(&self, table: &str) -> Result<Option<Vec<SqlCol>>, RunError> {
+        let mut st = self.db.prepare(&format!("PRAGMA table_info({})", qi(table))).map_err(sql_err)?;
+        let cols = st.query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)? != 0))).map_err(sql_err)?;
+        let cols: Vec<_> = cols.collect::<Result<_, _>>().map_err(sql_err)?;
+        Ok((!cols.is_empty()).then_some(cols))
+    }
+
+    /// Makes the tables fit the program where no data can be lost: new tables are created and
+    /// seeded, new optional columns added. Everything else is left as it is and reported.
+    pub fn migrate(&mut self, p: &Program) -> Result<Migration, RunError> {
+        let mut m = Migration::default();
+        for t in p.tables.values() {
+            let Some(have) = self.columns(&t.name)? else {
+                self.create(t)?;
+                self.seed(p, std::slice::from_ref(&t.name)).map_err(|(_, e)| e)?;
+                m.applied.push(format!("created {}", t.name));
+                continue;
+            };
+            for c in &t.cols {
+                match have.iter().find(|h| h.0 == *c.name) {
+                    None if c.opt => {
+                        self.q(&format!("ALTER TABLE {} ADD COLUMN {} {}", qi(&t.name), qi(&c.name), c.ty.sql()), vec![], true, false)?;
+                        m.applied.push(format!("added {}.{}", t.name, c.name));
+                    }
+                    None => m.pending.push(format!("{}.{} is new and required", t.name, c.name)),
+                    Some((_, ty, _)) if ty != c.ty.sql() => m.pending.push(format!("{}.{} was {ty}, is now {}", t.name, c.name, c.ty.sql())),
+                    Some((_, _, notnull)) if *notnull == c.opt => m.pending.push(format!("{}.{} is {} optional", t.name, c.name, if c.opt { "now" } else { "no longer" })),
+                    Some(_) => {}
+                }
+            }
+            for h in have.iter().filter(|h| h.0 != "id" && t.col(&h.0).is_none()) {
+                m.pending.push(format!("{}.{} is gone from the program", t.name, h.0));
+            }
+        }
+        self.log.clear();
+        Ok(m)
+    }
+
+    /// Drops the table, then creates and seeds it as the program declares it.
+    pub fn reset(&mut self, p: &Program, table: &str) -> Result<(), RunError> {
+        let Some(t) = p.tables.get(table) else { return fail(format!("there's no table called {table}")) };
+        self.q(&format!("DROP TABLE IF EXISTS {}", qi(table)), vec![], true, false)?;
+        self.create(t)?;
+        self.seed(p, std::slice::from_ref(&t.name)).map_err(|(_, e)| e)?;
+        self.log.clear();
+        Ok(())
     }
 
     /// Runs the seeds of the tables in `only`; a failure carries the seed's line.

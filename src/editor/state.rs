@@ -10,6 +10,7 @@ use crate::editor::analysis::{Analysis, Parent, Range, Step};
 use crate::editor::model::{Fill, Question};
 use crate::editor::debug::{self, Debug, Move};
 use crate::editor::ops;
+use crate::editor::repl::{self, Repl};
 use crate::editor::text;
 use crate::editor::view::Target;
 use crate::editor::vim;
@@ -93,6 +94,8 @@ pub enum Event {
     Served(String),
     /// What the runs of this text did.
     Ran(Rc<Runs>),
+    /// The REPL line with this id ran.
+    Replied(u64, repl::Entry),
 }
 
 /// What an image's runs did, and which text they ran.
@@ -175,6 +178,9 @@ pub struct State {
     pub plan: Rc<crate::store::Plan>,
     /// The plan is on screen, waiting for enter.
     pub migrating: bool,
+    pub repl: Repl,
+    /// A REPL line, waiting to be run.
+    pub repl_ask: Option<repl::Ask>,
     /// Something only the app can do, waiting to be done.
     pub effect: Option<Effect>,
     pub hover: Option<Target>,
@@ -188,7 +194,7 @@ pub struct State {
     pub row_lines: Rc<Vec<usize>>,
 }
 
-pub const OPS: [&str; 15] = ["extract name", "inline", "hole note", "rework", "drop", "swap", "rename name", "fix", "data", "debug 1–9", "migrate", "reset table", "help", "w", "q"];
+pub const OPS: [&str; 16] = ["extract name", "inline", "hole note", "rework", "drop", "swap", "rename name", "fix", "data", "debug 1–9", "migrate", "reset table", "repl", "help", "w", "q"];
 
 impl State {
     pub fn new(text: &str) -> State {
@@ -216,6 +222,8 @@ impl State {
             live: None,
             plan: Rc::default(),
             migrating: false,
+            repl: Repl::default(),
+            repl_ask: None,
             live_tables: None,
             effect: None,
             hover: None,
@@ -319,6 +327,25 @@ pub fn update(st: State, ev: Event) -> State {
         Event::Ran(_) => st,
         Event::Viewport(rows, lines) => State { rows, row_lines: Rc::new(lines), ..st },
         Event::Scroll(dy) => State { scroll: (st.scroll + dy).clamp(0.0, st.row_lines.len() as f32), ..st },
+        Event::Replied(id, e) if st.repl.waiting == Some(id) => {
+            let rec = e.out.clone().unwrap_or_else(|_| st.repl.rec.clone());
+            let entries = Rc::new(st.repl.entries.iter().cloned().chain([e]).collect());
+            State { repl: Repl { waiting: None, entries, rec, ..st.repl.clone() }, ..st }
+        }
+        Event::Replied(..) => st,
+        Event::Key(k, _) if st.repl.focus && !st.migrating && st.help.is_none() => repl_key(st, k),
+        Event::Key(Key::Char('`'), _) if st.mode == Mode::Normal && st.keys.is_empty() && st.data.is_none() && st.debug.is_none() && st.help.is_none() => {
+            State { repl: Repl { open: true, focus: true, ..st.repl.clone() }, ..st }
+        }
+        // a click on an earlier line goes on from the record it left
+        Event::Press(Some(Target::Entry(i)), ..) => match st.repl.entries.get(i).map(|e| e.out.clone()) {
+            Some(Ok(rec)) => State { repl: Repl { rec, focus: true, ..st.repl.clone() }, ..st }.say(format!("repl · going on from line {}", i + 1), Tone::Ok),
+            _ => st,
+        },
+        Event::Press(..) if st.repl.focus => {
+            let st = State { repl: Repl { focus: false, ..st.repl.clone() }, ..st };
+            update(st, ev)
+        }
         Event::Key(Key::Enter, _) if st.migrating => State { effect: Some(Effect::Migrate(st.plan.clone())), ..st },
         Event::Key(Key::Escape | Key::Char('q'), _) | Event::Press(..) if st.migrating => State { migrating: false, ..st },
         Event::Key(..) | Event::Hover(..) if st.migrating => st,
@@ -352,6 +379,50 @@ pub fn update(st: State, ev: Event) -> State {
         }
         ev => vim::event(st, ev),
     }
+}
+
+// ---------- the repl ----------
+/// A key in the REPL's input line: edit it, bring back an earlier line, or run it.
+fn repl_key(st: State, k: Key) -> State {
+    let mut r = st.repl.clone();
+    let mut chars: Vec<char> = r.input.chars().collect();
+    let lines: Vec<&str> = r.entries.iter().rev().map(|e| e.line.as_str()).collect();
+    match k {
+        Key::Escape => r.focus = false,
+        Key::Char('`') => (r.open, r.focus) = (false, false),
+        Key::Enter if r.waiting.is_none() && !r.input.trim().is_empty() => {
+            r.asked += 1;
+            r.waiting = Some(r.asked);
+            let ask = repl::Ask { id: r.asked, line: std::mem::take(&mut r.input), rec: r.rec.clone(), text: st.image.text.clone() };
+            (r.col, r.recall) = (0, None);
+            return State { repl: r, repl_ask: Some(ask), ..st };
+        }
+        Key::Char(c) => {
+            chars.insert(r.col, c);
+            r.col += 1;
+        }
+        Key::Backspace if r.col > 0 => {
+            r.col -= 1;
+            chars.remove(r.col);
+        }
+        Key::Left => r.col = r.col.saturating_sub(1),
+        Key::Right => r.col = (r.col + 1).min(chars.len()),
+        Key::Home => r.col = 0,
+        Key::Up | Key::Down => {
+            let at = match (k, r.recall) {
+                (Key::Up, None) => Some(0),
+                (Key::Up, Some(i)) => Some((i + 1).min(lines.len().saturating_sub(1))),
+                (_, Some(0) | None) => None,
+                (_, Some(i)) => Some(i - 1),
+            };
+            r.recall = at.filter(|&i| i < lines.len());
+            chars = r.recall.map_or(vec![], |i| lines[i].chars().collect());
+            r.col = chars.len();
+        }
+        _ => {}
+    }
+    r.input = chars.into_iter().collect();
+    State { repl: r, ..st }
 }
 
 // ---------- the data view ----------
@@ -546,6 +617,8 @@ pub fn run(st: State, raw: &str) -> State {
     let need = |what: &str| format!("put the cursor on {what}, or select some");
     match op.as_str() {
         "help" | "h" => State { help: Some(0), ..st },
+        "repl" if arg == "clear" => State { repl: Repl { open: true, focus: true, ..Repl::default() }, ..st }.say("repl · back to {}", Tone::Ok),
+        "repl" => State { repl: Repl { open: true, focus: true, ..st.repl.clone() }, ..st },
         "migrate" if st.live.is_none() => st.say("migrate works on the live database — naga start", Tone::No),
         "migrate" => State { effect: Some(Effect::Plan), ..st },
         "fix" => {
@@ -643,6 +716,8 @@ pub mod tests {
                 r if r.starts_with("<cr>") => (Key::Enter, 4),
                 r if r.starts_with("<bs>") => (Key::Backspace, 4),
                 r if r.starts_with("<undo>") => (Key::Undo, 6),
+                r if r.starts_with("<up>") => (Key::Up, 4),
+                r if r.starts_with("<down>") => (Key::Down, 6),
                 r => {
                     let c = r.chars().next().unwrap();
                     (Key::Char(c), c.len_utf8())
@@ -764,6 +839,34 @@ pub mod tests {
         assert_eq!(st.an.text, SRC, "keys don't reach the code while the plan is up");
         assert_eq!(keys(st.clone(), "<cr>").effect, Some(Effect::Migrate(plan)));
         assert!(!keys(st, "<esc>").migrating);
+    }
+
+    #[test]
+    fn the_repl_runs_lines_on_its_record_and_goes_on_from_any_earlier_one() {
+        let src = "double = +{twice: n * 2}\n";
+        let run = |st: State| {
+            let ask = st.repl_ask.clone().expect("a line to run");
+            let mut store = crate::store::Store::new(&st.image.program).unwrap();
+            let (e, _) = repl::eval(&ask.text, &ask.line, ask.rec, &mut store);
+            update(State { repl_ask: None, ..st }, Event::Replied(ask.id, e))
+        };
+        let st = keys(State::new(src), "`+{n: 3}<cr>");
+        assert_eq!(st.repl.waiting, Some(1));
+        let st = run(st);
+        let st = run(keys(st, "double<cr>"));
+        assert_eq!(crate::value::show_rec(&st.repl.rec), "{n: 3, twice: 6}");
+        let st = run(keys(st, "= twice + 1<cr>"));
+        assert_eq!(st.repl.entries[2].value.as_ref().map(|v| v.show()), Some("7".into()));
+        assert_eq!(st.an.text, src, "the code is untouched");
+        // up brings back earlier lines; esc goes back to the code
+        let st = keys(st, "<up><up>");
+        assert_eq!(st.repl.input, "double");
+        let st = keys(st, "<esc>");
+        assert!(!st.repl.focus && st.repl.open);
+        // a click on line 1 goes on from its record
+        let st = update(st, Event::Press(Some(Target::Entry(0)), None, false));
+        assert_eq!(crate::value::show_rec(&st.repl.rec), "{n: 3}");
+        assert!(!keys(st, "`").repl.open);
     }
 
     #[test]

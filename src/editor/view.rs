@@ -44,6 +44,8 @@ pub enum Target {
     Table(Name),
     /// One of the data view's chips: live, seed, a run.
     Rows(Rows),
+    /// A line in the REPL's transcript.
+    Entry(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -106,6 +108,9 @@ impl Line {
 #[derive(Debug, Default)]
 pub struct Frame {
     pub code: Vec<Line>,
+    /// The REPL, between the code and the bar, with the caret in its input line.
+    pub pane: Vec<Line>,
+    pub pane_caret: Option<(usize, usize)>,
     pub shape: Vec<Line>,
     pub msg: Line,
     pub stat: Line,
@@ -260,6 +265,65 @@ pub fn view(st: &State) -> Frame {
     if let Some(d) = &st.data {
         return data_view(st, d);
     }
+    let mut f = code_view(st);
+    if st.repl.open {
+        (f.pane, f.pane_caret) = repl_pane(&st.repl);
+    }
+    if st.repl.focus && st.msg.is_none() {
+        f.msg = Line::default();
+        f.msg.push("ENTER RUNS THE STEPS ON THE RECORD · = EXPR SHOWS A VALUE · ↑ ↓ EARLIER LINES · CLICK A LINE TO GO ON FROM IT · ESC BACK TO THE CODE · ` CLOSES", Style::plain(DIM), None);
+    }
+    f
+}
+
+/// Rows the REPL takes.
+const PANE: usize = 10;
+
+/// naga, coloured as the editor colours it.
+fn push_code(line: &mut Line, code: &str, target: Option<Target>) {
+    let chars: Vec<char> = code.chars().collect();
+    for (c, k) in chars.iter().zip(classes(&chars)) {
+        line.push(&shown(*c, k).to_string(), class_style(k), target.clone());
+    }
+}
+
+/// The transcript's last rows, the record lines run on, and the input line.
+fn repl_pane(r: &crate::editor::repl::Repl) -> (Vec<Line>, Option<(usize, usize)>) {
+    let row = |parts: &[(&str, Color)], target: Option<Target>| {
+        let mut l = Line::default();
+        parts.iter().for_each(|(t, c)| l.push(t, Style::plain(*c), target.clone()));
+        l
+    };
+    let mut rows = vec![];
+    for (i, e) in r.entries.iter().enumerate() {
+        let t = Some(Target::Entry(i));
+        let mut l = row(&[("› ", DIM)], t.clone());
+        push_code(&mut l, &e.line, t.clone());
+        rows.push(l);
+        rows.extend(e.said.iter().map(|s| row(&[("  ", DIM), (s, FG)], t.clone())));
+        rows.push(match (&e.out, &e.value) {
+            (Err(msg), _) => row(&[("  ✗ ", ERR), (msg, ERR)], t.clone()),
+            (_, Some(v)) => row(&[("  = ", DIM), (&v.show(), FG)], t.clone()),
+            (Ok(rec), None) => row(&[("  ", DIM), (&crate::value::show_rec(rec), DIM)], t.clone()),
+        });
+    }
+    if r.waiting.is_some() {
+        rows.push(row(&[("  …", DIM)], None));
+    }
+    let keep = rows.len().saturating_sub(PANE - 2);
+    let mut pane: Vec<Line> = std::iter::repeat_with(Line::default).take((PANE - 2).saturating_sub(rows.len())).chain(rows.into_iter().skip(keep)).collect();
+    pane.push(row(&[("RECORD ", FAINT), (&crate::value::show_rec(&r.rec), CALL)], None));
+    let mut input = row(&[("› ", if r.focus { CALL } else { DIM })], None);
+    push_code(&mut input, &r.input, None);
+    if r.input.is_empty() && !r.focus {
+        input.push("` TO TYPE HERE · = EXPR SHOWS A VALUE · ` AGAIN CLOSES", Style::plain(FAINT), None);
+    }
+    pane.push(input);
+    let caret = r.focus.then_some((PANE - 1, r.col + 2));
+    (pane, caret)
+}
+
+fn code_view(st: &State) -> Frame {
     let an = &st.an;
     let mut err_steps = vec![];
     let mut err_lines = vec![];
@@ -633,6 +697,7 @@ fn shapes_at(an: &Analysis, s: &Step) -> (Vec<String>, Vec<String>) {
 fn stat(st: &State, f: &mut Frame) {
     let an = &st.an;
     let mode = match &st.mode {
+        _ if st.repl.focus => "REPL",
         Mode::Normal => "NORMAL",
         Mode::Insert => "INSERT",
         Mode::Visual(_, false) => "VISUAL",
@@ -714,6 +779,7 @@ fn shape(an: &Analysis, t: &Target) -> Vec<Line> {
     let mut lines = vec![];
     match t {
         Target::Rows(_) => {}
+        Target::Entry(i) => first.push(&format!("LINE {} · CLICK TO GO ON FROM THE RECORD IT LEFT", i + 1), k, None),
         Target::Table(name) => {
             first.push(&upper(name), Style::bold(TABLE, 800), None);
             first.push(" · CLICK TO SEE ITS ROWS", k, None);

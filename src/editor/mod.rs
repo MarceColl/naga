@@ -7,6 +7,7 @@ mod gpu;
 mod help;
 mod ops;
 mod outline;
+mod repl;
 mod state;
 mod text;
 mod vim;
@@ -30,6 +31,8 @@ enum Wake {
     Served(String),
     /// An image's runs, run on their own thread.
     Ran(state::Runs),
+    /// A REPL line ran.
+    Repl(u64, repl::Entry),
 }
 
 /// How long typing pauses before the image goes live: its tables, the server, its runs.
@@ -50,6 +53,8 @@ struct App {
     path: String,
     /// When the image goes live, if a new one is waiting.
     settle: Option<std::time::Instant>,
+    /// Where REPL lines run without a live server: tables made from the seeds.
+    sandbox: Option<Arc<crate::serve::Live>>,
 }
 
 impl App {
@@ -103,6 +108,9 @@ impl App {
         if next.effect == Some(state::Effect::Quit) {
             self.quit = true;
         }
+        if let Some(ask) = next.repl_ask.take() {
+            self.repl(ask, next.image.program.clone());
+        }
         // a question for the model goes out on its own thread; the answer comes back as a Wake
         if let Some((id, q)) = next.ask.take() {
             let proxy = self.proxy.clone();
@@ -151,6 +159,42 @@ impl App {
         }
     }
 
+    /// Runs a REPL line on its own thread: on the live tables (open pages then refresh), or
+    /// without a server on tables made from the seeds.
+    fn repl(&mut self, ask: repl::Ask, p: Arc<crate::ast::Program>) {
+        let live = match (&self.live, &self.sandbox) {
+            (Some(l), _) => Ok(l.clone()),
+            (None, Some(s)) => {
+                let _ = s.with_store(|st| st.migrate(&p));
+                Ok(s.clone())
+            }
+            (None, None) => {
+                let path = std::env::temp_dir().join(format!("naga-repl-{}.db", std::process::id()));
+                let _ = std::fs::remove_file(&path);
+                crate::serve::Live::open(p, &path).map(|(l, _)| l)
+            }
+        };
+        let live = match live {
+            Ok(l) => l,
+            Err(e) => return self.send(Event::Replied(ask.id, repl::Entry { line: ask.line, said: vec![], out: Err(e), value: None })),
+        };
+        if self.live.is_none() {
+            self.sandbox = Some(live.clone());
+        }
+        let (proxy, refresh) = (self.proxy.clone(), self.live.is_some());
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(move || {
+                let ran = live.with_store(|s| repl::eval(&ask.text, &ask.line, ask.rec.clone(), s));
+                let (entry, wrote) = ran.unwrap_or_else(|e| (repl::Entry { line: ask.line, said: vec![], out: Err(e), value: None }, false));
+                if wrote && refresh {
+                    crate::live::refresh(&live, None);
+                }
+                let _ = proxy.send_event(Wake::Repl(ask.id, entry));
+            })
+            .ok();
+    }
+
     fn pos(&self) -> Option<crate::ast::Pos> {
         self.gpu.as_ref()?.pos_at(&self.frame, self.cursor.0, self.cursor.1)
     }
@@ -166,6 +210,7 @@ impl ApplicationHandler<Wake> for App {
             Wake::Reply(id, r) => self.send(Event::AgentReply(id, r)),
             Wake::Served(line) => self.send(Event::Served(line)),
             Wake::Ran(runs) => self.send(Event::Ran(Rc::new(runs))),
+            Wake::Repl(id, entry) => self.send(Event::Replied(id, entry)),
         }
     }
 
@@ -330,12 +375,27 @@ fn shot(state: State, out: &str, opts: &std::collections::HashMap<&str, &str>) -
         st = update(update(st, Event::Press(t.clone(), at, false)), Event::Release);
         st = update(st, Event::Hover(t, at, false));
     }
+    // REPL lines run at once, on tables made from the seeds
+    let mut store = crate::store::Store::new(&st.image.program).map_err(|e| e.msg)?;
+    let tables: Vec<crate::value::Name> = st.image.program.tables.keys().cloned().collect();
+    store.seed(&st.image.program, &tables).map_err(|(_, e)| e.msg)?;
+    let mut press = |st: State, k: Key, shift: bool| {
+        let mut st = update(st, Event::Key(k, shift));
+        if let Some(a) = st.repl_ask.take() {
+            let (e, _) = repl::eval(&a.text, &a.line, a.rec, &mut store);
+            st = update(st, Event::Replied(a.id, e));
+        }
+        st
+    };
     for c in opts.get("--type").copied().unwrap_or("").chars() {
-        st = update(st, Event::Key(Key::Char(c), false));
+        st = match c {
+            '\n' => press(st, Key::Enter, false),
+            c => press(st, Key::Char(c), false),
+        };
     }
     for k in opts.get("--keys").map_or(vec![], |k| k.split(',').collect()) {
         let (k, shift) = key(k).ok_or(format!("naga: unknown key {k}"))?;
-        st = update(st, Event::Key(k, shift));
+        st = press(st, k, shift);
     }
     // the typing is over: the runs catch up
     let runs = Rc::new(state::Runs::of(&st.image));
@@ -356,7 +416,7 @@ pub fn edit(path: &str, args: &[String]) -> Result<(), String> {
     }
     let frame = view(&state);
     let el = EventLoop::<Wake>::with_user_event().build().map_err(|e| e.to_string())?;
-    let mut app = App { proxy: el.create_proxy(), quit: false, live: None, state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into(), settle: None };
+    let mut app = App { proxy: el.create_proxy(), quit: false, live: None, state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into(), settle: None, sandbox: None };
     el.run_app(&mut app).map_err(|e| e.to_string())
 }
 
@@ -387,6 +447,6 @@ pub fn start(path: &str, port: u16) -> Result<(), String> {
     });
     state.live = Some((port, None));
     let frame = view(&state);
-    let mut app = App { proxy: el.create_proxy(), quit: false, live: Some(live), state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into(), settle: None };
+    let mut app = App { proxy: el.create_proxy(), quit: false, live: Some(live), state: Some(state), frame, gpu: None, window: None, cursor: (0.0, 0.0), mods: ModifiersState::empty(), pressed: false, path: path.into(), settle: None, sandbox: None };
     el.run_app(&mut app).map_err(|e| e.to_string())
 }

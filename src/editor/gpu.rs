@@ -63,6 +63,8 @@ pub struct Layout {
     pub bar_top: f32,
     /// The bar's height with all three shape rows showing.
     pub bar_max: f32,
+    /// The REPL pane's height, when it's open.
+    pub pane_h: f32,
 }
 
 
@@ -82,6 +84,7 @@ pub struct Gpu {
     shape: Buffer,
     msg: Buffer,
     stat: Buffer,
+    pane: Buffer,
     pub layout: Layout,
     out: Out,
     /// Where the code went in the last frame: the first row shown, the top of row 0, and
@@ -90,6 +93,9 @@ pub struct Gpu {
     first: usize,
     code_top: f32,
     edges: Vec<Vec<f32>>,
+    /// Where the pane's rows went, and their character edges.
+    pane_top: f32,
+    pane_edges: Vec<Vec<f32>>,
 }
 
 /// Where frames go: a window's surface, or a texture that can be saved as a PNG.
@@ -181,7 +187,7 @@ impl Gpu {
             cache: None,
         });
         let empty = |fonts: &mut FontSystem| Buffer::new(fonts, Metrics::new(14.0, 20.0));
-        let (code, shape, msg, stat) = (empty(&mut fonts), empty(&mut fonts), empty(&mut fonts), empty(&mut fonts));
+        let (code, shape, msg, stat, pane) = (empty(&mut fonts), empty(&mut fonts), empty(&mut fonts), empty(&mut fonts), empty(&mut fonts));
         let mut gpu = Gpu {
             device,
             queue,
@@ -198,11 +204,14 @@ impl Gpu {
             shape,
             msg,
             stat,
-            layout: Layout { scale: 1.0, width: 1.0, height: 1.0, code_size: 14.0, code_line: 25.0, cell: 9.0, bar_size: 12.0, bar_line: 18.0, pad: 16.0, top: 28.0, bar_top: 0.0, bar_max: 0.0 },
+            pane,
+            layout: Layout { scale: 1.0, width: 1.0, height: 1.0, code_size: 14.0, code_line: 25.0, cell: 9.0, bar_size: 12.0, bar_line: 18.0, pad: 16.0, top: 28.0, bar_top: 0.0, bar_max: 0.0, pane_h: 0.0 },
             out,
             first: 0,
             code_top: 0.0,
             edges: vec![],
+            pane_top: 0.0,
+            pane_edges: vec![],
         };
         gpu.resize(size, scale);
         gpu
@@ -211,7 +220,7 @@ impl Gpu {
     /// Code rows that always fit above the bar, however tall it gets.
     pub fn rows(&self) -> usize {
         let l = self.layout;
-        ((l.height - l.bar_max - l.top) / l.code_line).floor().max(1.0) as usize
+        ((l.height - l.bar_max - l.pane_h - l.top) / l.code_line).floor().max(1.0) as usize
     }
 
     pub fn redraw(&self) {
@@ -245,6 +254,7 @@ impl Gpu {
             top: 28.0 * scale,
             bar_top: self.layout.bar_top,
             bar_max: self.layout.bar_max,
+            pane_h: self.layout.pane_h,
         };
         self.queue.write_buffer(&self.screen, 0, &[size.width as f32, size.height as f32, 0.0, 0.0].map(f32::to_ne_bytes).concat());
     }
@@ -276,10 +286,25 @@ impl Gpu {
         let bar_top = l.height - bar_h;
         self.layout.bar_top = bar_top;
         self.layout.bar_max = (3.0 + msg_rows) * l.bar_line + 4.0 * l.scale + 20.0 * l.scale;
+        // the pane sits on the bar, its rows in the code's font
+        let pane_pad = 8.0 * l.scale;
+        let pane_h = if f.pane.is_empty() { 0.0 } else { f.pane.len() as f32 * l.code_line + 2.0 * pane_pad };
+        self.layout.pane_h = pane_h;
+        let pane_top = bar_top - pane_h;
+        let pane_text = pane_top + pane_pad;
+        let panes: Vec<&Line> = f.pane.iter().collect();
+        set_lines(&mut self.fonts, &mut self.pane, &panes, Metrics::new(l.code_size, l.code_line), code_attrs, None, Wrap::None);
+        self.pane_edges = panes.iter().map(|line| grid(line, l)).collect();
+        for run in self.pane.layout_runs() {
+            if let Some(e) = self.pane_edges.get_mut(run.line_i) {
+                *e = edges(run.text, run.glyphs, run.line_w).iter().map(|x| l.pad + x).collect();
+            }
+        }
+        self.pane_top = pane_text;
 
         // the code, shifted up by the scroll
         let first = scroll.floor() as usize;
-        let rows = ((bar_top - l.top) / l.code_line).ceil() as usize + 1;
+        let rows = ((pane_top - l.top) / l.code_line).ceil() as usize + 1;
         let shown: Vec<&Line> = f.code.iter().skip(first).take(rows).collect();
         set_lines(&mut self.fonts, &mut self.code, &shown, Metrics::new(l.code_size, l.code_line), code_attrs, None, Wrap::None);
         let code_top = l.top - scroll.fract() * l.code_line;
@@ -292,12 +317,7 @@ impl Gpu {
         (self.first, self.code_top) = (first, code_top);
 
         let mut rects: Vec<Vertex> = vec![];
-        let mut rect = |x: f32, y: f32, w: f32, h: f32, c: Color| {
-            let c = linear(c);
-            for (px, py) in [(x, y), (x + w, y), (x, y + h), (x + w, y), (x + w, y + h), (x, y + h)] {
-                rects.push(Vertex { p: [px, py], c });
-            }
-        };
+        let mut rect = |x: f32, y: f32, w: f32, h: f32, c: Color| push_rect(&mut rects, x, y, w, h, c);
         let glyph_h = l.code_size * 1.35;
         for (r, line) in shown.iter().enumerate() {
             let y = code_top + r as f32 * l.code_line;
@@ -329,8 +349,19 @@ impl Gpu {
             let x = e.get(col).copied().unwrap_or_else(|| e.last().copied().unwrap_or(l.pad));
             rect(x, code_top + r as f32 * l.code_line + (l.code_line - glyph_h) / 2.0, 2.0 * l.scale, glyph_h, palette::FG);
         }
+        let code_n = rects.len() as u32;
+        let mut rect = |x: f32, y: f32, w: f32, h: f32, c: Color| push_rect(&mut rects, x, y, w, h, c);
         rect(0.0, bar_top, l.width, bar_h, palette::BG);
         rect(0.0, bar_top, l.width, l.scale.max(1.0), palette::RULE);
+        if pane_h > 0.0 {
+            rect(0.0, pane_top, l.width, pane_h, palette::HOVER);
+            rect(0.0, pane_top, l.width, l.scale.max(1.0), palette::RULE);
+            if let Some((r, col)) = f.pane_caret.filter(|c| c.0 < self.pane_edges.len()) {
+                let e = &self.pane_edges[r];
+                let x = e.get(col).copied().unwrap_or_else(|| e.last().copied().unwrap_or(l.pad));
+                rect(x, pane_text + r as f32 * l.code_line + (l.code_line - glyph_h) / 2.0, 2.0 * l.scale, glyph_h, palette::FG);
+            }
+        }
         let vertices = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytes(&rects), usage: wgpu::BufferUsages::VERTEX });
 
         self.viewport.update(&self.queue, Resolution { width: self.config.width, height: self.config.height });
@@ -338,7 +369,8 @@ impl Gpu {
         let pad_top = 10.0 * l.scale;
         let msg_top = bar_top + pad_top + shape_rows * l.bar_line + gap;
         let areas = [
-            TextArea { buffer: &self.code, left: l.pad, top: code_top, scale: 1.0, bounds: full(bar_top), default_color: glyphon::Color::rgb(236, 236, 236), custom_glyphs: &[] },
+            TextArea { buffer: &self.code, left: l.pad, top: code_top, scale: 1.0, bounds: full(pane_top), default_color: glyphon::Color::rgb(236, 236, 236), custom_glyphs: &[] },
+            TextArea { buffer: &self.pane, left: l.pad, top: pane_text, scale: 1.0, bounds: full(bar_top), default_color: glyphon::Color::rgb(236, 236, 236), custom_glyphs: &[] },
             TextArea {
                 buffer: &self.shape,
                 left: l.pad,
@@ -360,7 +392,7 @@ impl Gpu {
             },
         ];
         // the code's rects are drawn under the bar's background, the text over both
-        let (code_rects, bar_rects) = (rects.len() as u32 - 12, 12);
+        let (code_rects, bar_rects) = (code_n, rects.len() as u32 - code_n);
         self.text.prepare(&self.device, &self.queue, &mut self.fonts, &mut self.atlas, &self.viewport, areas, &mut self.swash).expect("text fits the atlas");
 
         let frame = match &self.out {
@@ -433,6 +465,13 @@ impl Gpu {
     }
 }
 
+fn push_rect(v: &mut Vec<Vertex>, x: f32, y: f32, w: f32, h: f32, c: Color) {
+    let c = linear(c);
+    for (px, py) in [(x, y), (x + w, y), (x, y + h), (x + w, y), (x + w, y + h), (x, y + h)] {
+        v.push(Vertex { p: [px, py], c });
+    }
+}
+
 fn bytes(v: &[Vertex]) -> &[u8] {
     // SAFETY: Vertex is repr(C) plain floats with no padding.
     unsafe { std::slice::from_raw_parts(v.as_ptr().cast(), std::mem::size_of_val(v)) }
@@ -465,13 +504,18 @@ fn set_lines(fonts: &mut FontSystem, buf: &mut Buffer, lines: &[&Line], m: Metri
 impl Gpu {
     /// What sits under a point of the window, in the last frame drawn.
     pub fn target_at(&self, f: &Frame, x: f32, y: f32) -> Option<Target> {
+        if y >= self.layout.bar_top - self.layout.pane_h && y < self.layout.bar_top {
+            let r = ((y - self.pane_top) / self.layout.code_line).floor().max(0.0) as usize;
+            let col = self.pane_edges.get(r)?.windows(2).position(|w| x >= w[0] && x < w[1])?;
+            return f.pane.get(r)?.target_at(col).cloned();
+        }
         let (r, col) = self.cell_at(x, y)?;
         f.code.get(r)?.target_at(col).cloned()
     }
 
     /// The program line and column under a point; past a line's end, its end.
     pub fn pos_at(&self, f: &Frame, x: f32, y: f32) -> Option<crate::ast::Pos> {
-        if y >= self.layout.bar_top || y < self.code_top {
+        if y >= self.layout.bar_top - self.layout.pane_h || y < self.code_top {
             return None;
         }
         let r = ((y - self.code_top) / self.layout.code_line) as usize;
@@ -483,7 +527,7 @@ impl Gpu {
 
     /// The code row (counting from the first shown) and character under a point.
     fn cell_at(&self, x: f32, y: f32) -> Option<(usize, usize)> {
-        if y >= self.layout.bar_top || y < self.code_top {
+        if y >= self.layout.bar_top - self.layout.pane_h || y < self.code_top {
             return None;
         }
         let r = ((y - self.code_top) / self.layout.code_line) as usize;

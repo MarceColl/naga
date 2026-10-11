@@ -4,8 +4,12 @@ use crate::machine::{Session, Step};
 use crate::syntax::parse;
 
 pub fn report(src: &str) -> String {
+    report_program(&parse(src))
+}
+
+/// The same report for a program that was already parsed, or built some other way.
+pub fn report_program(p: &crate::ast::Program) -> String {
     let mut out = vec![];
-    let p = parse(src);
     out.extend(p.errors.iter().map(|e| format!("parse {}:{} {}", e.line, e.col, e.msg)));
     out.extend(p.warnings.iter().map(|w| format!("warn {} {}", w.line, w.msg)));
     out.extend(p.holes.iter().map(|h| format!("hole {} {}: {}", h.line, h.word, h.note)));
@@ -13,7 +17,7 @@ pub fn report(src: &str) -> String {
     let first = p.words.keys().next().filter(|_| p.routes.is_empty());
     let entry = if p.words.contains_key("main") { Some("main".into()) } else { first.cloned() };
     if let Some(entry) = &entry {
-        let mut s = Session::new(&p, entry);
+        let mut s = Session::new(p, entry);
         s.run(Step::Continue, &[], 200000);
         let st = s.state();
         let err = st.error.as_ref().map(|e| format!(": {} @{}", e.msg, e.line)).unwrap_or_default();
@@ -31,7 +35,7 @@ pub fn report(src: &str) -> String {
             out.extend(store.log.iter().map(|(t, l)| format!("sql [{t}] {l}")));
         }
     }
-    let r = Checker::default().check(&p, entry.as_ref());
+    let r = Checker::default().check(p, entry.as_ref());
     out.push(format!("check {} errors", r.errors.len()));
     out.extend(r.errors.iter().map(|e| format!("  ✗ {}:{} {}", e.line, e.col, e.msg)));
     for n in p.words.keys() {
@@ -49,7 +53,7 @@ pub fn report(src: &str) -> String {
         }
     }
     for r in &p.runs {
-        let o = crate::runs::run(&p, r);
+        let o = crate::runs::run(p, r);
         out.push(format!("run \"{}\" {}", r.name, o.verdict.name()));
         out.extend(o.said.iter().map(|l| format!("  > {l}")));
         if o.verdict == crate::runs::Verdict::Fail {

@@ -1,4 +1,5 @@
 //! Every case survives `Program` → records → `Program`: the decoded program prints its golden.
+use naga::check::Checker;
 use naga::machine::{Session, Step};
 use naga::records::{clause, program, un_clause, un_program};
 use naga::report::report_program;
@@ -27,6 +28,59 @@ fn every_case_round_trips_to_its_golden() {
     failed.sort();
     println!("{}/{n} cases round-trip to their golden", n - failed.len());
     assert!(failed.is_empty(), "{}/{n} differ:\n{}", failed.len(), failed.join("\n"));
+}
+
+/// The records carry the clause's source text and positions too: the checker caches by `chunk_text`
+/// and the diagnostics quote `head_src` and `guard_src`, and no golden would notice if they went missing.
+#[test]
+fn chunk_text_and_positions_survive() {
+    let mut seen = 0;
+    for (name, src) in cases() {
+        let (before, after) = (parse(&src), un_program(&program(&parse(&src))).unwrap());
+        assert_eq!(before.words.len(), after.words.len(), "{name}: words");
+        for (w, bw) in &before.words {
+            let aw = &after.words[w];
+            assert_eq!(bw.clauses.len(), aw.clauses.len(), "{name}: {w} clauses");
+            for (i, (b, a)) in bw.clauses.iter().zip(&aw.clauses).enumerate() {
+                let at = format!("{name}: {w} clause {i}");
+                assert_eq!(b.chunk_text, a.chunk_text, "{at}: chunk_text");
+                assert_eq!(b.chunk_line, a.chunk_line, "{at}: chunk_line");
+                assert_eq!(b.head_src, a.head_src, "{at}: head_src");
+                assert_eq!(b.guard_src, a.guard_src, "{at}: guard_src");
+                assert_eq!(b.line, a.line, "{at}: line");
+                seen += 1;
+            }
+        }
+    }
+    assert!(seen > 0, "no clauses compared");
+}
+
+/// The checker's memo keys on the chunk text: a decoded program is the same clauses to it, so a
+/// checker that has seen the parsed program recomputes nothing for the decoded one.
+#[test]
+fn the_checker_memo_sees_the_same_clauses() {
+    let mut warmed = 0;
+    for (name, src) in cases() {
+        let p = parse(&src);
+        let mut checker = Checker::default();
+        let first = checker.check(&p, None);
+        warmed += first.stats.recomputed.len();
+        let second = checker.check(&un_program(&program(&p)).unwrap(), None);
+        assert!(second.stats.recomputed.is_empty(), "{name}: recomputed {:?}", second.stats.recomputed);
+    }
+    assert!(warmed > 0, "the first check never filled the memo");
+}
+
+/// Every case's name and source.
+fn cases() -> Vec<(String, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("cases");
+    let mut all: Vec<_> = fs::read_dir(root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .map(|p| (p.file_stem().unwrap().to_string_lossy().to_string(), fs::read_to_string(&p).unwrap()))
+        .collect();
+    all.sort();
+    all
 }
 
 /// What the cases never write: `not`, `or`, `⫽{…}` and `raise` steps, a `{}` head, a pattern that matches nil.

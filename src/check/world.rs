@@ -1,7 +1,7 @@
 //! Worlds: one possible situation inside a word, with what it assumes about the input.
 use super::ty::*;
 use super::{Cx, Sig};
-use crate::num::cmp16;
+use crate::num::text_cmp;
 use crate::value::{Name, Value};
 use indexmap::{IndexMap, IndexSet};
 use std::rc::Rc;
@@ -426,7 +426,7 @@ pub fn only_msg(cx: &Cx, name: &str, table: &str, role: Role, what: &str, extra:
 }
 
 pub fn add_apart(w: &mut World, a: &Key, b: &Key, what: &str, except: &[Name]) {
-    let (a, b) = if cmp16(a, b).is_gt() { (b, a) } else { (a, b) };
+    let (a, b) = if text_cmp(a, b).is_gt() { (b, a) } else { (a, b) };
     let key = obl_key(a, "apart");
     let mut list = match w.facts.get(&key).and_then(|f| f.obl.clone()) {
         Some(Obl::Apart(l)) => l.into_iter().filter(|x| &x.other != b).collect(),

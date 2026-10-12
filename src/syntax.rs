@@ -1,7 +1,7 @@
 //! Lexer and parser. A program is a list of chunks: a line at column 0 starts one,
 //! indented lines continue it. Each chunk is a table, a seed, or one clause of a word.
 use crate::ast::*;
-use crate::num::slice16;
+use crate::num::text_slice;
 use crate::store::compile_where;
 use crate::value::{Name, Value, list};
 use std::sync::Arc;
@@ -101,11 +101,8 @@ pub fn lex_line(src: &str, line: usize) -> R<Vec<Token>> {
 /// (elsewhere it opens a hole).
 fn lex(src: &str, line: usize, types: bool) -> R<Vec<Token>> {
     let cs: Vec<char> = src.chars().collect();
-    // UTF-16 column of each char index
-    let mut col = vec![0; cs.len() + 1];
-    for (k, c) in cs.iter().enumerate() {
-        col[k + 1] = col[k] + c.len_utf16();
-    }
+    // a scalar column is the char index
+    let col: Vec<usize> = (0..=cs.len()).collect();
     let raw = |a: usize, b: usize| cs[a..b].iter().collect::<String>();
     let mut toks = vec![];
     let mut i = 0;
@@ -804,14 +801,14 @@ fn def(ts: &mut Ts) -> R<(Name, Clause)> {
         let w = ts.next().unwrap();
         guard = Some(expr(ts, 0)?);
         let g = ts.last().unwrap();
-        guard_src = Some(if w.line == g.line { slice16(&ts.lines[w.line - 1], w.end, g.end).trim().to_string() } else { "guard".into() });
+        guard_src = Some(if w.line == g.line { text_slice(&ts.lines[w.line - 1], w.end, g.end).trim().to_string() } else { "guard".into() });
     }
     let eq = ts.next();
     if !matches!(&eq, Some(Token { t: Tk::Op("=" | ":"), .. })) {
         let what = if pat.is_some() { " and its pattern" } else { "" };
         return ts.err(format!("expected “=” after {name}{what}"), eq.as_ref());
     }
-    let head_src = slice16(&ts.lines[name_tok.line - 1], name_tok.col, eq.unwrap().col).trim().to_string();
+    let head_src = text_slice(&ts.lines[name_tok.line - 1], name_tok.col, eq.unwrap().col).trim().to_string();
     let b = body(ts, None)?;
     let clause = Clause { pattern: pat, guard, guard_src, body: b.into(), line: name_tok.line, head_src, chunk_line: 0, chunk_text: String::new() };
     Ok((name, clause))
@@ -1065,7 +1062,7 @@ fn run(lines: &[String], ch: &[usize]) -> R<Run> {
 fn request(lines: &[String], g: &[usize]) -> R<Request> {
     let first = strip_comment(&lines[g[0]]);
     let line = g[0] + 1;
-    let col = |i: usize| first[..i].encode_utf16().count();
+    let col = |i: usize| first[..i].chars().count();
     let (va, vb) = word_at(first, 0);
     let Some(verb) = step(&first[va..vb]) else {
         return serr(format!("a step starts with {}, LIVE or EVENT", VERBS.join(", ")), Some((line, col(va))));
@@ -1122,7 +1119,7 @@ fn route(lines: &[String], ch: &[usize], live: bool) -> R<Route> {
     let (_, verb_end) = if live { (0, "live".len()) } else { word_at(first, "route".len()) };
     let (pa, pb) = word_at(first, verb_end);
     let src = &first[pa..pb];
-    let col = first[..pa].encode_utf16().count();
+    let col = first[..pa].chars().count();
     let (segs, query) = path(src).or_else(|msg| serr(msg, Some((line, col))))?;
     let blanked = format!("{}{}{}", &first[..pa], " ".repeat(pb - pa), &first[pb..]);
     let mut toks = lex(&blanked, line, true)?;

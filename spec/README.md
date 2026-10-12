@@ -43,6 +43,7 @@ node playground/build.js
 | Section | What to know for a port |
 | --- | --- |
 | values | records are insertion-ordered maps (output order depends on it); constants are `{sym}` |
+| text | the reference counts UTF-16 units (`len`, columns, `<`, slices); naga counts Unicode scalars, a deliberate parity break (see PLAN.md) |
 | lexer | identifiers may contain `-` between letters; ASCII spellings are canonicalised (`->` → `→`, `//` → `⫽`, …) |
 | expressions | Pratt parser; `.f` and `.{…}` postfix (`.{` only when glued to the left token) |
 | record algebra (runtime) | change sets are plain records: `{same: v}`, `{set: new, was: old}`, `{add: v}`, `{del: old}` |

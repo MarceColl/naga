@@ -3,7 +3,7 @@
 //! (must hold or it's an error), outputs, the fields written, or a failure.
 use super::ty::*;
 use super::world::*;
-use crate::num::cmp16;
+use crate::num::text_cmp;
 use crate::value::{Name, Value};
 use indexmap::IndexMap;
 
@@ -94,11 +94,11 @@ fn facts_of(w: &World) -> Facts {
             _ => fx.lacks.push(key.clone()),
         }
     }
-    let by_depth = |a: &str, b: &str| depth(a).cmp(&depth(b)).then(cmp16(a, b));
+    let by_depth = |a: &str, b: &str| depth(a).cmp(&depth(b)).then(text_cmp(a, b));
     fx.cond.sort_by(|a, b| by_depth(&a.0, &b.0));
     fx.pre.sort_by(|a, b| by_depth(&a.0, &b.0));
     sort16(&mut fx.lacks);
-    fx.obl.sort_by(|a, b| cmp16(&format!("{}{}", a.key, a.kind()), &format!("{}{}", b.key, b.kind())));
+    fx.obl.sort_by(|a, b| text_cmp(&format!("{}{}", a.key, a.kind()), &format!("{}{}", b.key, b.kind())));
     fx
 }
 

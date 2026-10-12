@@ -1,4 +1,4 @@
-//! The program as parsed. Positions are 1-based lines and UTF-16 columns.
+//! The program as parsed. Positions are 1-based lines and scalar columns.
 use crate::value::{Name, Value};
 use indexmap::IndexMap;
 use std::sync::Arc;

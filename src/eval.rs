@@ -114,7 +114,7 @@ fn binary(op: BinOp, a: Value, b: Value) -> Result<Value, RunError> {
         Lt | Gt | Le | Ge => {
             let ord = match (&a, &b) {
                 (Value::Num(x), Value::Num(y)) => x.partial_cmp(y),
-                (Value::Text(x), Value::Text(y)) => Some(num::cmp16(x, y)),
+                (Value::Text(x), Value::Text(y)) => Some(num::text_cmp(x, y)),
                 _ => return fail(format!("can't compare {} with {} ({} {} {})", a.type_name(), b.type_name(), a.show(), op.glyph(), b.show())),
             };
             use std::cmp::Ordering::*;

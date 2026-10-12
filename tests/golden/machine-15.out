@@ -1,5 +1,5 @@
 run done after 6 steps
-> 8
+> 7
 > [1, "a", {b: :nil}]
 > [:z, :a]
 > [0, 1, 2]

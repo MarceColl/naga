@@ -26,7 +26,7 @@ under the reference, differing only in spelling and in error columns.
 
 | module | holds |
 | --- | --- |
-| `syntax`, `ast` | lexer (UTF-16 columns, like the reference), parser, program |
+| `syntax`, `ast` | lexer (scalar columns), parser, program |
 | `value`, `num` | values, printing, record algebra, JS number semantics |
 | `eval` | expressions and builtins |
 | `store` | SQLite tables, where → SQL |

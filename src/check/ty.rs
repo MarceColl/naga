@@ -1,5 +1,5 @@
 //! Static types and record shapes.
-use crate::num::cmp16;
+use crate::num::text_cmp;
 use crate::value::{Name, Value};
 use indexmap::{IndexMap, IndexSet};
 use std::rc::Rc;
@@ -105,7 +105,7 @@ pub fn rec_of(entries: Vec<(&str, Ty, bool)>) -> Ty {
 }
 
 pub fn sort16<S: AsRef<str>>(v: &mut [S]) {
-    v.sort_by(|a, b| cmp16(a.as_ref(), b.as_ref()));
+    v.sort_by(|a, b| text_cmp(a.as_ref(), b.as_ref()));
 }
 
 pub fn child_key(origin: &str, f: &str) -> Key {

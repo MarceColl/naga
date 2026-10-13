@@ -260,7 +260,7 @@ pub struct Runtime<'a> {
 
 pub fn initial(p: &Program, entry: &Name, subj: Arc<Rec>) -> State {
     let line = p.words.get(entry).map_or(0, |w| w.line);
-    let call = Stmt { kind: StmtKind::Call(entry.clone()), pos: Pos { line, col: 0 }, end: Pos { line, col: entry.encode_utf16().count() } };
+    let call = Stmt { kind: StmtKind::Call(entry.clone()), pos: Pos { line, col: 0 }, end: Pos { line, col: entry.chars().count() } };
     State {
         subj,
         k: vec![Frame::Seq { body: Arc::from(vec![call]), i: 0, lvl: 0 }],

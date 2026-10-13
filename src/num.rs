@@ -44,18 +44,20 @@ pub fn json_str(s: &str) -> String {
     out
 }
 
-/// JavaScript string length and ordering count UTF-16 code units.
-pub fn len16(s: &str) -> usize {
-    s.encode_utf16().count()
+/// Text is UTF-8 and counted in Unicode scalars (`char`s), not UTF-16 units.
+/// Byte length will be `len(bytes(t))` once `Bytes` exists.
+pub fn text_len(s: &str) -> usize {
+    s.chars().count()
 }
 
-pub fn cmp16(a: &str, b: &str) -> std::cmp::Ordering {
-    a.encode_utf16().cmp(b.encode_utf16())
+/// UTF-8 byte order is scalar order.
+pub fn text_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    a.cmp(b)
 }
 
-/// `s.slice(a, b)` with UTF-16 offsets.
-pub fn slice16(s: &str, a: usize, b: usize) -> String {
-    String::from_utf16_lossy(&s.encode_utf16().skip(a).take(b.saturating_sub(a)).collect::<Vec<_>>())
+/// `s.slice(a, b)` with scalar offsets.
+pub fn text_slice(s: &str, a: usize, b: usize) -> String {
+    s.chars().skip(a).take(b.saturating_sub(a)).collect()
 }
 
 #[cfg(test)]
@@ -70,5 +72,13 @@ mod tests {
         assert_eq!(show(-0.0), "0");
         assert_eq!(round(2.5), 3.0);
         assert_eq!(round(-2.5), -2.0);
+    }
+
+    #[test]
+    fn text_counts_scalars() {
+        assert_eq!(text_len("héllo 😀"), 7);
+        assert_eq!(text_slice("a😀b", 1, 2), "😀");
+        // UTF-16 order would put the emoji (surrogate D83D) before U+FF5E
+        assert!(text_cmp("😀", "\u{ff5e}").is_gt());
     }
 }

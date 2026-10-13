@@ -199,7 +199,7 @@ pub static FUNCS: &[Func] = &[
     Func { name: "len", sig: "len(x) → Num", note: "items in a list, characters in text, fields in a record", effect: false, args: (1, 1), listy: false,
         run: |a, _| Ok(Value::Num(match &arg(a, 0) {
             Value::List(xs) => xs.len(),
-            Value::Text(s) => num::len16(s),
+            Value::Text(s) => num::text_len(s),
             Value::Rec(r) => r.len(),
             v => return fail(format!("len() needs a list, string or record, got {}", v.type_name())),
         } as f64)),

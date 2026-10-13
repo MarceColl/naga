@@ -6,6 +6,7 @@ pub mod funcs;
 pub mod live;
 pub mod machine;
 pub mod num;
+pub mod records;
 pub mod report;
 pub mod runs;
 pub mod serve;
